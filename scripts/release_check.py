@@ -30,6 +30,7 @@ REQUIRED_SDIST_FILES = {
     "CHANGELOG.md",
     "LICENSE",
     "README.md",
+    "README_EN.md",
     "SECURITY.md",
     "pyproject.toml",
     "scripts/release_check.py",

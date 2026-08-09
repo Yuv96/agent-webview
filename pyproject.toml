@@ -45,6 +45,7 @@ Homepage = "https://github.com/Yuv96/agent-webview"
 Repository = "https://github.com/Yuv96/agent-webview.git"
 Issues = "https://github.com/Yuv96/agent-webview/issues"
 Changelog = "https://github.com/Yuv96/agent-webview/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/Yuv96/agent-webview#readme"
 Security = "https://github.com/Yuv96/agent-webview/security/policy"
 
 [project.optional-dependencies]
