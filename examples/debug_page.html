@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Agent 调试页</title>
+</head>
+<body>
+  <label>
+    内容
+    <input id="message" value="">
+  </label>
+  <button id="submit" type="button">提交</button>
+  <output id="result"></output>
+  <script>
+    document.cookie = "seed=one; Path=/";
+    document.querySelector("#submit").addEventListener("click", async () => {
+      const value = document.querySelector("#message").value;
+      document.querySelector("#result").textContent = value;
+      await fetch("/missing.json");
+    });
+  </script>
+</body>
+</html>

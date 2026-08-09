@@ -1,0 +1,94 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-webview"
+description = "A hidden pywebview browser controlled through an agent-friendly HTTP debugging API."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+keywords = ["agent", "browser", "debugging", "pywebview", "webview"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Environment :: Win32 (MS Windows)",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Debuggers",
+]
+dependencies = [
+    "fastapi>=0.115,<1",
+    "filelock>=3.16,<4",
+    "httpx>=0.28,<1",
+    "platformdirs>=4.3,<5",
+    "psutil>=6.1,<8",
+    "pydantic>=2.9,<3",
+    "pywebview>=6.2.1,<7",
+    "structlog>=25.1,<26",
+    "uvicorn>=0.34,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Yuv96/agent-webview"
+Repository = "https://github.com/Yuv96/agent-webview.git"
+Issues = "https://github.com/Yuv96/agent-webview/issues"
+Changelog = "https://github.com/Yuv96/agent-webview/blob/main/CHANGELOG.md"
+Security = "https://github.com/Yuv96/agent-webview/security/policy"
+
+[project.optional-dependencies]
+dev = [
+    "detect-secrets>=1.5,<2",
+    "httpx2>=2,<3",
+    "mypy>=1.17,<2",
+    "pip-audit>=2.9,<3",
+    "pytest-cov>=6,<8",
+    "pytest>=8.3,<10",
+    "ruff>=0.12,<1",
+    "twine>=6,<7",
+]
+linux-gtk = [
+    "pywebview[gtk]>=6.2.1,<7; sys_platform == 'linux'",
+]
+linux-qt = [
+    "pywebview[qt]>=6.2.1,<7; sys_platform == 'linux'",
+]
+
+[project.scripts]
+agent-webview = "agent_webview.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_webview"]
+
+[tool.hatch.version]
+path = "src/agent_webview/__init__.py"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/agent_webview"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
