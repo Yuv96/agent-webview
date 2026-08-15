@@ -27,6 +27,7 @@ from agent_webview.models import (
     JavaScriptValueResponse,
     NavigateRequest,
     NavigateResponse,
+    ProxyStatus,
     WindowStatus,
 )
 from agent_webview.runtime import BrowserRuntime
@@ -72,6 +73,12 @@ def create_worker_app(runtime: BrowserRuntime, token: str) -> FastAPI:
     @router.get("/status", response_model=WindowStatus)
     def status() -> dict:
         return runtime.status()
+
+    @router.get("/proxy", response_model=ProxyStatus)
+    def proxy_status(
+        timeout: float = Query(default=0, ge=0, le=30),
+    ) -> dict:
+        return runtime.proxy_status(timeout)
 
     @router.post("/window/show", response_model=WindowStatus)
     def show() -> dict:

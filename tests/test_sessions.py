@@ -10,6 +10,7 @@ import pytest
 
 from agent_webview.cookies import SnapshotStore
 from agent_webview.models import SessionCreateRequest
+from agent_webview.proxy import ProxyConfigurationError
 from agent_webview.sessions import Session, SessionManager, WorkerResponseError
 
 
@@ -26,10 +27,11 @@ class FakeProcess:
         return 0
 
 
-def _manager(tmp_path: Path) -> SessionManager:
+def _manager(tmp_path: Path, *, proxy: str | None = None) -> SessionManager:
     return SessionManager(
         runtime_dir=tmp_path / "runtime",
         snapshot_store=SnapshotStore(tmp_path / "snapshots"),
+        proxy=proxy,
     )
 
 
@@ -59,6 +61,7 @@ def test_create_and_destroy_session_uses_private_config(tmp_path, monkeypatch) -
 
     assert config["url"] == "https://example.com/"
     assert config["cookies"][0]["name"] == "session"
+    assert config["proxy"] is None
     assert config["token"]
     if os.name != "nt":
         assert stat.S_IMODE(session.config_file.stat().st_mode) == 0o600
@@ -67,6 +70,55 @@ def test_create_and_destroy_session_uses_private_config(tmp_path, monkeypatch) -
     result = manager.destroy(session.session_id)
     assert result["exit_code"] == 0
     assert not session.config_file.parent.exists()
+    manager.close()
+
+
+@pytest.mark.parametrize(
+    ("global_proxy", "window_proxy", "expected_url", "expected_scope"),
+    [
+        (None, "http://127.0.0.1:7001", "http://127.0.0.1:7001", "window"),
+        (
+            "https://proxy.example:7443",
+            None,
+            "https://proxy.example:7443",
+            "global",
+        ),
+        (
+            "http://127.0.0.1:7002",
+            "http://127.0.0.1:7003",
+            "http://127.0.0.1:7002",
+            "global",
+        ),
+    ],
+)
+def test_session_proxy_scope_and_global_precedence(
+    tmp_path,
+    monkeypatch,
+    global_proxy: str | None,
+    window_proxy: str | None,
+    expected_url: str,
+    expected_scope: str,
+) -> None:
+    manager = _manager(tmp_path, proxy=global_proxy)
+    process = FakeProcess()
+    monkeypatch.setattr("agent_webview.sessions.subprocess.Popen", lambda *_, **__: process)
+    monkeypatch.setattr(
+        manager,
+        "_wait_ready",
+        lambda *_: {"pid": process.pid, "port": 54321},
+    )
+    monkeypatch.setattr(
+        manager,
+        "request",
+        lambda *_, **__: (_ for _ in ()).throw(httpx.ConnectError("不可用")),
+    )
+
+    created = manager.create(SessionCreateRequest(proxy=window_proxy))
+    session = manager.get(created["session_id"])
+    config = json.loads(session.config_file.read_text(encoding="utf-8"))
+
+    assert config["proxy"] == {"url": expected_url, "scope": expected_scope}
+    manager.destroy(session.session_id)
     manager.close()
 
 
@@ -120,3 +172,14 @@ def test_cookie_overrides_replace_matching_identity() -> None:
         ("a", "新值"),
         ("b", "2"),
     ]
+
+
+def test_worker_proxy_configuration_error_is_preserved(tmp_path) -> None:
+    ready_file = tmp_path / "ready.json"
+    ready_file.write_text(
+        json.dumps({"error": "WKWebView 代理需要 macOS 14 或更高版本"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProxyConfigurationError, match="macOS 14"):
+        SessionManager._wait_ready(FakeProcess(), ready_file)

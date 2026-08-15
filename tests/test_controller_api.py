@@ -20,6 +20,14 @@ def _window() -> dict[str, Any]:
         "visible": False,
         "url": "https://example.com/",
         "title": "示例",
+        "proxy": {
+            "enabled": False,
+            "scope": None,
+            "server": None,
+            "state": "disabled",
+            "ip": None,
+            "location": None,
+        },
         "bounds": {"x": 0, "y": 0, "width": 1280, "height": 900},
         "latest_event_sequence": 0,
     }
@@ -83,6 +91,8 @@ class FakeManager:
                 "url": "https://example.com/",
                 "cookies": [{"name": "session", "value": "测试值"}],
             }
+        if method == "GET" and path == "/v1/proxy":
+            return _window()["proxy"]
         if path in {"/v1/window/show", "/v1/window/hide"}:
             return _window()
         return {"ok": True}
@@ -108,6 +118,10 @@ def test_controller_auth_schema_and_lifespan(tmp_path) -> None:
         assert schema["content"]["application/json"]["schema"]["$ref"].endswith(
             "/SessionListResponse"
         )
+        proxy_schema = openapi["paths"]["/v1/sessions/{session_id}/proxy"]["get"]
+        assert proxy_schema["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]["$ref"].endswith("/ProxyStatus")
 
     assert manager.closed is True
 
@@ -139,3 +153,17 @@ def test_snapshot_endpoints_do_not_expose_authless_data(tmp_path) -> None:
             headers=headers,
         )
         assert deleted.json() == {"deleted": True, "snapshot_id": snapshot_id}
+
+
+def test_proxy_status_endpoint_supports_hidden_sessions(tmp_path) -> None:
+    manager = FakeManager(tmp_path)
+    app = create_controller_app(manager, "test-token")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/sessions/session-1/proxy?timeout=1",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == _window()["proxy"]

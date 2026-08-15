@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from agent_webview.proxy import normalize_proxy_url
+
 
 class ApiResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -20,6 +22,15 @@ class WindowBounds(ApiResponse):
     height: int | float | None
 
 
+class ProxyStatus(ApiResponse):
+    enabled: bool
+    scope: Literal["global", "window"] | None
+    server: str | None
+    state: Literal["disabled", "checking", "active", "unavailable"]
+    ip: str | None
+    location: str | None
+
+
 class WindowStatus(ApiResponse):
     session_id: str
     window_id: str
@@ -30,6 +41,7 @@ class WindowStatus(ApiResponse):
     visible: bool
     url: str | None
     title: str | None
+    proxy: ProxyStatus
     bounds: WindowBounds
     latest_event_sequence: int
 
@@ -142,6 +154,7 @@ class SessionCreateRequest(BaseModel):
     cookies: list[CookieRecord] = Field(default_factory=list)
     remote_debugging_port: int | None = Field(default=None, ge=1024, le=65535)
     gui: str | None = None
+    proxy: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -152,6 +165,11 @@ class SessionCreateRequest(BaseModel):
         if not value.startswith(allowed):
             raise ValueError("URL 仅支持 http、https 或 about")
         return value
+
+    @field_validator("proxy")
+    @classmethod
+    def validate_proxy(cls, value: str | None) -> str | None:
+        return normalize_proxy_url(value) if value is not None else None
 
 
 class NavigateRequest(BaseModel):

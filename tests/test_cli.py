@@ -39,6 +39,27 @@ def test_invalid_port_is_rejected(port: str) -> None:
         _parse_args(["--port", port])
 
 
+def test_global_proxy_accepts_cli_and_environment(monkeypatch) -> None:
+    assert _parse_args(["--proxy", "http://127.0.0.1:7890"]).proxy == (
+        "http://127.0.0.1:7890"
+    )
+
+    monkeypatch.setenv("AGENT_WEBVIEW_PROXY", "https://proxy.example")
+    assert _parse_args([]).proxy == "https://proxy.example:443"
+
+
+@pytest.mark.parametrize(
+    "proxy",
+    [
+        "socks5://127.0.0.1:1080",
+        "http://user:" + "value" + "@127.0.0.1:7890",
+    ],
+)
+def test_invalid_global_proxy_is_rejected(proxy: str) -> None:
+    with pytest.raises(SystemExit):
+        _parse_args(["--proxy", proxy])
+
+
 def test_runtime_file_is_private(tmp_path) -> None:
     target = tmp_path / "runtime" / "controller.json"
 
@@ -47,9 +68,15 @@ def test_runtime_file_is_private(tmp_path) -> None:
         host="127.0.0.1",
         port=8765,
         token="测试令牌",
+        proxy="http://127.0.0.1:7890",
     )
 
-    assert json.loads(target.read_text(encoding="utf-8"))["token"] == "测试令牌"
+    document = json.loads(target.read_text(encoding="utf-8"))
+    assert document["token"] == "测试令牌"
+    assert document["proxy"] == {
+        "enabled": True,
+        "server": "http://127.0.0.1:7890",
+    }
     if os.name != "nt":
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
         assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700

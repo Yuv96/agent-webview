@@ -26,12 +26,14 @@ from agent_webview.models import (
     InstrumentationRequest,
     JavaScriptRequest,
     NavigateRequest,
+    ProxyStatus,
     SessionCreateRequest,
     SessionDescription,
     SessionDestroyResponse,
     SessionListResponse,
     WindowStatus,
 )
+from agent_webview.proxy import ProxyConfigurationError
 from agent_webview.sessions import SessionManager, WorkerResponseError
 
 log = structlog.get_logger(__name__)
@@ -76,6 +78,10 @@ def create_controller_app(manager: SessionManager, token: str) -> FastAPI:
     async def network_handler(_, __: httpx.HTTPError) -> JSONResponse:
         return JSONResponse(status_code=502, content={"detail": "子进程接口不可用"})
 
+    @app.exception_handler(ProxyConfigurationError)
+    async def proxy_handler(_, error: ProxyConfigurationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": str(error)})
+
     @app.exception_handler(Exception)
     async def unknown_handler(_, error: Exception) -> JSONResponse:
         log.error("接口执行失败", error_type=type(error).__name__)
@@ -110,6 +116,22 @@ def create_controller_app(manager: SessionManager, token: str) -> FastAPI:
     @router.get("/sessions/{session_id}", response_model=SessionDescription)
     def get_session(session_id: str) -> dict[str, Any]:
         return manager.describe(manager.get(session_id))
+
+    @router.get(
+        "/sessions/{session_id}/proxy",
+        response_model=ProxyStatus,
+    )
+    def get_proxy_status(
+        session_id: str,
+        timeout: float = Query(default=0, ge=0, le=30),
+    ) -> dict[str, Any]:
+        return call(
+            session_id,
+            "GET",
+            "/v1/proxy",
+            params={"timeout": timeout},
+            timeout=timeout + 5,
+        )
 
     @router.delete("/sessions/{session_id}", response_model=SessionDestroyResponse)
     def destroy_session(session_id: str) -> dict[str, Any]:

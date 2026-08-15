@@ -23,6 +23,7 @@ from agent_webview.files import (
     write_private_json,
 )
 from agent_webview.logging import configure_logging
+from agent_webview.proxy import normalize_proxy_url
 from agent_webview.sessions import SessionManager
 
 log = structlog.get_logger(__name__)
@@ -40,6 +41,13 @@ def _port(value: str) -> int:
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError("端口必须在 1 到 65535 之间")
     return port
+
+
+def _proxy_url(value: str) -> str:
+    try:
+        return normalize_proxy_url(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -111,6 +119,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--json-logs", action="store_true")
+    parser.add_argument(
+        "--proxy",
+        type=_proxy_url,
+        default=os.getenv("AGENT_WEBVIEW_PROXY") or None,
+        help="所有新窗口使用的 HTTP/HTTPS 代理",
+    )
     args = parser.parse_args(argv)
     if not _is_loopback_host(args.host) and not args.allow_remote:
         parser.error("监听非本机地址时必须显式指定 --allow-remote")
@@ -123,6 +137,7 @@ def _write_runtime_file(
     host: str,
     port: int,
     token: str,
+    proxy: str | None = None,
 ) -> None:
     write_private_json(
         path,
@@ -131,6 +146,7 @@ def _write_runtime_file(
             "base_url": _base_url(host, port),
             "token": token,
             "docs_url": f"{_base_url(host, port)}/docs",
+            "proxy": {"enabled": proxy is not None, "server": proxy},
         },
     )
 
@@ -142,6 +158,7 @@ def _serve(args: argparse.Namespace, token: str, runtime_file: Path) -> None:
         snapshot_store=SnapshotStore(data_dir / "cookie-snapshots"),
         log_level=args.log_level,
         json_logs=args.json_logs,
+        proxy=args.proxy,
     )
     original_handlers: dict[int, Any] = {}
     try:
@@ -151,6 +168,7 @@ def _serve(args: argparse.Namespace, token: str, runtime_file: Path) -> None:
             host=args.host,
             port=args.port,
             token=token,
+            proxy=args.proxy,
         )
         log.info(
             "服务已启动",

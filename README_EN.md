@@ -29,6 +29,7 @@ Manage hidden browser sessions, inspect the DOM, execute JavaScript, and observe
 | Hidden by default | Show windows only when needed and run multiple sessions in parallel |
 | Page interaction | Navigate, query the DOM, enter text, click elements, and execute JavaScript |
 | Observability | Long-poll DOM events, DOM mutations, and page-level network activity |
+| Proxy debugging | Apply a global or per-window HTTP(S) proxy and resolve its exit IP and location asynchronously |
 | Cookie snapshots | Save cookies and make a best-effort restore in a new session |
 | Cross-platform | Windows, macOS, and Linux with a GTK or Qt backend |
 
@@ -102,6 +103,13 @@ agent-webview \
   --runtime-file ./agent-webview-runtime.json
 ```
 
+To route every window created by this controller through the same proxy, set it
+when the controller starts:
+
+```bash
+agent-webview --proxy http://127.0.0.1:7890
+```
+
 ### 2. Create and control a session
 
 This Python example reads the runtime information, creates a hidden session,
@@ -162,6 +170,7 @@ Once the service is running, open the `docs_url` from the runtime file or visit
 | `POST` | `/v1/sessions` | Create an isolated private session |
 | `GET` | `/v1/sessions` | List sessions and process information |
 | `GET` | `/v1/sessions/{id}` | Read window, handle, and process state |
+| `GET` | `/v1/sessions/{id}/proxy` | Read proxy configuration, exit IP, and location |
 | `DELETE` | `/v1/sessions/{id}` | Destroy a session |
 | `POST` | `/v1/sessions/{id}/navigate` | Navigate to another URL |
 | `POST` | `/v1/sessions/{id}/javascript/evaluate` | Evaluate an expression and return its value |
@@ -188,6 +197,65 @@ A newly created session includes:
 - `launcher_pid`: a launcher process ID in some Windows virtual environments,
   otherwise `null`.
 
+## 🌐 Proxy debugging
+
+Passing `--proxy` at controller startup sets an immutable global proxy for all
+windows created until that controller process exits. Without a global proxy,
+set `proxy` on an individual session request:
+
+```python
+session = client.post(
+    "/v1/sessions",
+    json={
+        "url": "https://example.com",
+        "visible": False,
+        "proxy": "http://127.0.0.1:7890",
+    },
+).raise_for_status().json()
+```
+
+The global proxy takes precedence over a per-window value so that every window
+under that controller uses the same route. Proxy URLs may use `http://` or
+`https://`. SOCKS, username/password authentication, paths, and query strings
+are not currently supported. Windows requires WebView2, and native proxy
+configuration on macOS requires macOS 14 or later.
+
+The target page starts loading immediately. A background thread queries a
+fixed third-party service through the proxy for its exit IP and location; page
+loading never waits for this lookup. After success, a visible window title
+looks like:
+
+```text
+[已进入代理模式 · 203.0.113.8 · China / Shanghai / Shanghai] Agent Webview
+```
+
+For hidden windows and programmatic callers, use the dedicated status endpoint:
+
+```python
+proxy = client.get(
+    f"/v1/sessions/{session_id}/proxy",
+    params={"timeout": 10},
+).raise_for_status().json()
+
+if proxy["state"] == "active":
+    print(proxy["server"], proxy["ip"], proxy["location"])
+```
+
+`timeout` defaults to `0` for an immediate response. A value up to 30 seconds
+waits only on that status request, never on the WebView. States mean:
+
+- `disabled`: this window has no configured proxy.
+- `checking`: the window started with the proxy while exit information is
+  still being resolved in the background.
+- `active`: the fixed lookup service successfully returned an exit IP and
+  location through the proxy.
+- `unavailable`: this lookup produced no result. The page continues normally,
+  and this state alone does not prove the proxy failed.
+
+Completion also emits a `proxy` event through the existing event stream. The
+lookup service URL is fixed internally and cannot be overridden through the
+CLI or HTTP API.
+
 ## 🔎 Page instrumentation
 
 Use `PUT /v1/sessions/{id}/instrumentation` to enable:
@@ -201,6 +269,7 @@ Use `PUT /v1/sessions/{id}/instrumentation` to enable:
 Long-poll events with `GET /v1/sessions/{id}/events?after=0&timeout=20`, then
 pass the returned `latest_sequence` as the next `after` value. The `kinds`
 parameter can filter `dom`, `network`, `mutation`, and `lifecycle` events.
+The `proxy` kind reports completion of the asynchronous exit lookup.
 
 The network probe is not a browser-level proxy. It cannot guarantee visibility
 into Service Workers, cache hits, extension traffic, or every response body.
@@ -236,12 +305,14 @@ them to version control.
 | `--data-dir` | Per-user data directory | Cookie snapshot directory |
 | `--runtime-dir` | Per-user runtime directory | Worker runtime files |
 | `--runtime-file` | Per-user runtime directory | Controller runtime information |
+| `--proxy` | Disabled | HTTP(S) proxy for all newly created windows |
 | `--allow-remote` | Disabled | Permit binding to a non-loopback address |
 | `--log-level` | `info` | Log level |
 | `--json-logs` | Disabled | Emit JSON logs |
 
 For a fixed token, prefer the `AGENT_WEBVIEW_TOKEN` environment variable so the
-secret does not appear in shell history or process arguments.
+secret does not appear in shell history or process arguments. The global proxy
+can also be set with `AGENT_WEBVIEW_PROXY`.
 
 ## 🔐 Security
 
@@ -250,6 +321,8 @@ browser cookies. Keep it within these boundaries:
 
 - Run it only on trusted devices and networks.
 - Never share runtime files, tokens, or cookie snapshots.
+- Proxy sessions send their exit IP to the built-in third-party geolocation
+  service.
 - The controller binds to loopback by default; non-loopback addresses require
   the explicit `--allow-remote` option.
 - Delete sessions when work is complete to release worker processes and WebView
@@ -266,8 +339,8 @@ browser cookies. Keep it within these boundaries:
 - DOM `click()` is not equivalent to an operating-system mouse event.
 - Screenshots are not currently exposed because pywebview has no uniform
   cross-backend page screenshot API.
-- This project is a WebView debugging and page inspection tool, not a complete
-  browser automation framework or network proxy.
+- This project can route WebView traffic to an existing proxy, but it is not a
+  proxy server or a complete browser automation framework.
 
 See the
 [API stability policy](https://github.com/Yuv96/agent-webview/blob/main/docs/api-stability.md)

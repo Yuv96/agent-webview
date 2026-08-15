@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 
@@ -29,6 +30,11 @@ from agent_webview.models import (
     DomQueryRequest,
     InstrumentationRequest,
 )
+from agent_webview.proxy import (
+    ProxyIdentity,
+    format_proxy_title,
+    lookup_proxy_identity,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -42,6 +48,11 @@ class BrowserRuntime:
         bridge: AgentBridge,
         events: EventBuffer,
         initial_cookies: list[CookieRecord] | None = None,
+        title: str = "Agent Webview",
+        requested_url: str = "about:blank",
+        proxy_url: str | None = None,
+        proxy_scope: Literal["global", "window"] | None = None,
+        proxy_lookup: Callable[[str], ProxyIdentity] = lookup_proxy_identity,
     ) -> None:
         self.session_id = session_id
         self.window_id = window_id
@@ -56,6 +67,34 @@ class BrowserRuntime:
         self._initial_cookies = list(initial_cookies or [])
         self._initial_cookies_attempted = not bool(self._initial_cookies)
         self._setup_lock = Lock()
+        self._base_title = title
+        self._requested_url = requested_url
+        self._proxy_url = proxy_url
+        self._proxy_lookup = proxy_lookup
+        self._proxy_lock = Lock()
+        self._proxy_lookup_started = False
+        self._proxy_lookup_finished = Event()
+        if proxy_url is None:
+            self._proxy_lookup_finished.set()
+        self._proxy_status: dict[str, Any] = {
+            "enabled": proxy_url is not None,
+            "scope": proxy_scope,
+            "server": proxy_url,
+            "state": "checking" if proxy_url else "disabled",
+            "ip": None,
+            "location": None,
+        }
+
+    @property
+    def startup_url(self) -> str:
+        return self._requested_url
+
+    @property
+    def initial_title(self) -> str:
+        return format_proxy_title(
+            self._base_title,
+            state=str(self._proxy_status["state"]),
+        )
 
     def attach_window(self, window: Any, *, visible: bool) -> None:
         self.window = window
@@ -87,6 +126,66 @@ class BrowserRuntime:
         self.closed = True
         self.bridge.ready.clear()
         self.events.append("lifecycle", {"event": "closed"})
+
+    def start_proxy_lookup(self) -> None:
+        with self._proxy_lock:
+            if not self._proxy_url or self._proxy_lookup_started:
+                return
+            self._proxy_lookup_started = True
+        Thread(target=self._complete_proxy_lookup, daemon=True).start()
+
+    def _complete_proxy_lookup(self) -> None:
+        assert self._proxy_url is not None
+        try:
+            identity = self._proxy_lookup(self._proxy_url)
+        except Exception as error:
+            log.debug(
+                "代理出口 IP 查询未完成",
+                session_id=self.session_id,
+                error_type=type(error).__name__,
+            )
+            self._set_proxy_unavailable()
+        else:
+            self._set_proxy_active(identity.ip, identity.location)
+
+    def _set_proxy_active(self, ip: str, location: str) -> None:
+        with self._proxy_lock:
+            self._proxy_status.update(
+                state="active",
+                ip=ip,
+                location=location,
+            )
+        self._update_proxy_title()
+        self.events.append(
+            "proxy",
+            {"event": "active", "ip": ip, "location": location},
+        )
+        self._proxy_lookup_finished.set()
+
+    def _set_proxy_unavailable(self) -> None:
+        with self._proxy_lock:
+            self._proxy_status.update(
+                state="unavailable",
+                ip=None,
+                location=None,
+            )
+        self._update_proxy_title()
+        self.events.append("proxy", {"event": "unavailable"})
+        self._proxy_lookup_finished.set()
+
+    def _update_proxy_title(self) -> None:
+        with self._proxy_lock:
+            status = dict(self._proxy_status)
+        title = format_proxy_title(
+            self._base_title,
+            state=str(status["state"]),
+            ip=status["ip"],
+            location=status["location"],
+        )
+        try:
+            self.window.set_title(title)
+        except Exception:
+            log.debug("代理状态标题更新失败", session_id=self.session_id)
 
     def _post_load_setup(self) -> None:
         if not self._setup_lock.acquire(blocking=False):
@@ -131,6 +230,7 @@ class BrowserRuntime:
             "visible": self.visible,
             "url": self._safe_current_url(),
             "title": self._safe_property("title"),
+            "proxy": self.proxy_status(),
             "bounds": {
                 "x": self._safe_property("x"),
                 "y": self._safe_property("y"),
@@ -139,6 +239,12 @@ class BrowserRuntime:
             },
             "latest_event_sequence": self.events.latest_sequence,
         }
+
+    def proxy_status(self, timeout: float = 0) -> dict[str, Any]:
+        if timeout > 0:
+            self._proxy_lookup_finished.wait(timeout)
+        with self._proxy_lock:
+            return dict(self._proxy_status)
 
     def show(self) -> dict[str, Any]:
         self.window.show()

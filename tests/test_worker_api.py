@@ -23,6 +23,14 @@ class FakeRuntime:
             "visible": False,
             "url": "about:blank",
             "title": "Agent Webview",
+            "proxy": {
+                "enabled": False,
+                "scope": None,
+                "server": None,
+                "state": "disabled",
+                "ip": None,
+                "location": None,
+            },
             "bounds": {"x": 0, "y": 0, "width": 1280, "height": 900},
             "latest_event_sequence": self.events.latest_sequence,
         }
@@ -32,6 +40,9 @@ class FakeRuntime:
 
     def hide(self) -> dict[str, Any]:
         return self.status()
+
+    def proxy_status(self, timeout: float = 0) -> dict[str, Any]:
+        return self.status()["proxy"]
 
     def navigate(self, url: str) -> dict[str, Any]:
         return {"accepted": True, "url": url}
@@ -58,6 +69,10 @@ def test_worker_core_endpoints_require_auth() -> None:
         status = client.get("/v1/status", headers=headers)
         assert status.status_code == 200
         assert status.json()["session_id"] == "session-1"
+
+        proxy = client.get("/v1/proxy?timeout=1", headers=headers)
+        assert proxy.status_code == 200
+        assert proxy.json()["state"] == "disabled"
 
         navigation = client.post(
             "/v1/navigate",

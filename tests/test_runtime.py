@@ -16,6 +16,7 @@ from agent_webview.models import (
     DomQueryRequest,
     InstrumentationRequest,
 )
+from agent_webview.proxy import ProxyIdentity
 from agent_webview.runtime import BrowserRuntime
 
 
@@ -66,6 +67,9 @@ class FakeWindow:
     def load_url(self, url: str) -> None:
         self.url = url
 
+    def set_title(self, title: str) -> None:
+        self.title = title
+
     def get_cookies(self):
         cookie = SimpleCookie()
         cookie["session"] = "测试值"
@@ -84,13 +88,14 @@ class FakeBridge:
         self.ready.set()
         self.window = None
         self.calls: list[tuple[str, bool, float]] = []
+        self.result: Any = {"executed": True}
 
     def attach_window(self, window) -> None:
         self.window = window
 
     def execute(self, code: str, *, expression: bool, timeout: float):
         self.calls.append((code, expression, timeout))
-        return {"executed": True}
+        return self.result
 
 
 def test_runtime_window_and_dom_lifecycle() -> None:
@@ -108,6 +113,7 @@ def test_runtime_window_and_dom_lifecycle() -> None:
 
     assert len(window.events.loaded.handlers) == 1
     assert runtime.status()["native_window_id"] == 42
+    assert runtime.status()["proxy"]["state"] == "disabled"
     assert runtime.show()["visible"] is True
     assert runtime.hide()["visible"] is False
 
@@ -165,3 +171,91 @@ def test_runtime_lifecycle_events_update_readiness() -> None:
     assert runtime.visible is True
     runtime._on_closed()
     assert runtime.closed is True
+
+
+def test_runtime_loads_page_while_proxy_lookup_runs_and_updates_title() -> None:
+    bridge = FakeBridge()
+    events = EventBuffer()
+    lookup_started = Event()
+    release_lookup = Event()
+
+    def lookup(proxy_url: str) -> ProxyIdentity:
+        assert proxy_url == "http://127.0.0.1:7890"
+        lookup_started.set()
+        assert release_lookup.wait(2)
+        return ProxyIdentity(ip="198.51.100.4", location="中国 / 香港")
+
+    runtime = BrowserRuntime(
+        session_id="session-1",
+        window_id="window-1",
+        bridge=bridge,
+        events=events,
+        title="代理调试",
+        requested_url="https://example.com/",
+        proxy_url="http://127.0.0.1:7890",
+        proxy_scope="window",
+        proxy_lookup=lookup,
+    )
+    window = FakeWindow()
+    runtime.attach_window(window, visible=False)
+
+    assert runtime.startup_url == "https://example.com/"
+    assert runtime.initial_title == "[代理模式] 代理调试"
+
+    runtime.start_proxy_lookup()
+    assert lookup_started.wait(1)
+    runtime._on_loaded()
+    assert runtime.operational_ready.wait(1)
+    assert runtime.proxy_status()["state"] == "checking"
+    assert runtime.navigate("https://example.org/")["accepted"] is True
+
+    release_lookup.set()
+    status = runtime.proxy_status(timeout=2)
+
+    assert status == {
+        "enabled": True,
+        "scope": "window",
+        "server": "http://127.0.0.1:7890",
+        "state": "active",
+        "ip": "198.51.100.4",
+        "location": "中国 / 香港",
+    }
+    assert window.url == "https://example.org/"
+    assert window.title == (
+        "[已进入代理模式 · 198.51.100.4 · 中国 / 香港] 代理调试"
+    )
+    proxy_events = events.get(after=0, limit=10, kinds=["proxy"]).events
+    assert proxy_events[0]["payload"]["event"] == "active"
+
+
+def test_runtime_keeps_proxy_mode_visible_when_ip_lookup_fails() -> None:
+    bridge = FakeBridge()
+    events = EventBuffer()
+
+    def failed_lookup(_: str) -> ProxyIdentity:
+        raise RuntimeError("查询不可用")
+
+    runtime = BrowserRuntime(
+        session_id="session-1",
+        window_id="window-1",
+        bridge=bridge,
+        events=events,
+        title="代理调试",
+        requested_url="about:blank",
+        proxy_url="https://127.0.0.1:8443",
+        proxy_scope="global",
+        proxy_lookup=failed_lookup,
+    )
+    window = FakeWindow()
+    runtime.attach_window(window, visible=False)
+
+    runtime.start_proxy_lookup()
+
+    status = runtime.proxy_status(timeout=2)
+    assert status["state"] == "unavailable"
+    assert status["ip"] is None
+    assert status["scope"] == "global"
+    assert window.title == "[代理模式] 代理调试"
+    assert window.url == "https://example.com/"
+    proxy_events = events.get(after=0, limit=10, kinds=["proxy"]).events
+    assert proxy_events[0]["payload"] == {"event": "unavailable"}

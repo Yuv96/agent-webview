@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27,<1.32"]
 build-backend = "hatchling.build"
 
 [project]
@@ -35,6 +35,7 @@ dependencies = [
     "platformdirs>=4.3,<5",
     "psutil>=6.1,<8",
     "pydantic>=2.9,<3",
+    "pyobjc-framework-Network>=10; sys_platform == 'darwin'",
     "pywebview>=6.2.1,<7",
     "structlog>=25.1,<26",
     "uvicorn>=0.34,<1",

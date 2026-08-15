@@ -21,6 +21,7 @@ import structlog
 from agent_webview.cookies import SnapshotStore
 from agent_webview.files import ensure_private_directory, write_private_json
 from agent_webview.models import CookieRecord, SessionCreateRequest
+from agent_webview.proxy import ProxyConfigurationError, normalize_proxy_url
 
 log = structlog.get_logger(__name__)
 CookieItems = list[dict[str, Any]]
@@ -52,11 +53,13 @@ class SessionManager:
         snapshot_store: SnapshotStore,
         log_level: str = "INFO",
         json_logs: bool = False,
+        proxy: str | None = None,
     ) -> None:
         self.runtime_dir = ensure_private_directory(runtime_dir)
         self.snapshot_store = snapshot_store
         self.log_level = log_level
         self.json_logs = json_logs
+        self.proxy = normalize_proxy_url(proxy) if proxy else None
         self._sessions: dict[str, Session] = {}
         self._lock = RLock()
         self._client = httpx.Client(timeout=35)
@@ -80,10 +83,17 @@ class SessionManager:
         ensure_private_directory(session_dir)
         config_file = session_dir / "worker.json"
         ready_file = session_dir / "ready.json"
+        effective_proxy = self.proxy or request.proxy
+        proxy_scope = "global" if self.proxy else ("window" if request.proxy else None)
         config = {
-            **request.model_dump(exclude={"snapshot_id", "cookies"}),
+            **request.model_dump(exclude={"snapshot_id", "cookies", "proxy"}),
             "url": url,
             "cookies": cookies,
+            "proxy": (
+                {"url": effective_proxy, "scope": proxy_scope}
+                if effective_proxy
+                else None
+            ),
             "session_id": session_id,
             "window_id": window_id,
             "token": token,
@@ -248,13 +258,16 @@ class SessionManager:
     ) -> dict[str, Any]:
         deadline = monotonic() + timeout
         while monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f"子进程提前退出，代码 {process.returncode}")
             if ready_file.is_file():
                 try:
-                    return json.loads(ready_file.read_text(encoding="utf-8"))
+                    ready = json.loads(ready_file.read_text(encoding="utf-8"))
+                    if ready.get("error"):
+                        raise ProxyConfigurationError(str(ready["error"]))
+                    return ready
                 except (OSError, json.JSONDecodeError):
                     pass
+            if process.poll() is not None:
+                raise RuntimeError(f"子进程提前退出，代码 {process.returncode}")
             sleep(0.05)
         raise TimeoutError("等待子进程启动超时")
 

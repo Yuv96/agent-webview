@@ -28,6 +28,7 @@
 | 默认隐藏 | 窗口按需显示，适合后台调试和多会话并行 |
 | 页面操作 | 支持导航、DOM 查询、输入、点击和 JavaScript 执行 |
 | 可观测性 | 支持 DOM 事件、DOM 变更和页面网络活动的长轮询采集 |
+| 代理调试 | 支持全局或单窗口 HTTP/HTTPS 代理，并异步查询出口 IP 与归属地 |
 | Cookie 快照 | 可保存 Cookie，并在新会话中尽力恢复 |
 | 跨平台 | 支持 Windows、macOS 和带 GTK/Qt 后端的 Linux |
 
@@ -98,6 +99,12 @@ agent-webview \
   --runtime-file ./agent-webview-runtime.json
 ```
 
+需要让该控制器创建的所有窗口都使用同一代理时，在启动时声明：
+
+```bash
+agent-webview --proxy http://127.0.0.1:7890
+```
+
 ### 2. 创建并控制会话
 
 下面的 Python 示例读取运行信息、创建隐藏会话、等待窗口就绪，然后读取页面标题：
@@ -157,6 +164,7 @@ with httpx.Client(
 | `POST` | `/v1/sessions` | 创建独立无痕会话 |
 | `GET` | `/v1/sessions` | 列出会话和进程信息 |
 | `GET` | `/v1/sessions/{id}` | 获取窗口、句柄和进程状态 |
+| `GET` | `/v1/sessions/{id}/proxy` | 查询代理配置、出口 IP 和归属地 |
 | `DELETE` | `/v1/sessions/{id}` | 销毁会话 |
 | `POST` | `/v1/sessions/{id}/navigate` | 导航到新地址 |
 | `POST` | `/v1/sessions/{id}/javascript/evaluate` | 执行表达式并返回结果 |
@@ -181,6 +189,56 @@ with httpx.Client(
 - `pid`：实际 pywebview worker 进程号。
 - `launcher_pid`：部分 Windows 虚拟环境中的启动器进程号，否则为 `null`。
 
+## 🌐 代理调试
+
+控制器启动时传入 `--proxy` 会设置全局代理，之后创建的所有窗口都会使用它，直到
+控制器进程退出。没有全局代理时，可以只为某个窗口在创建请求中传入 `proxy`：
+
+```python
+session = client.post(
+    "/v1/sessions",
+    json={
+        "url": "https://example.com",
+        "visible": False,
+        "proxy": "http://127.0.0.1:7890",
+    },
+).raise_for_status().json()
+```
+
+全局代理优先于创建请求中的窗口代理，保证该控制器下的所有窗口使用同一代理。
+代理地址支持 `http://` 和 `https://`，暂不支持 SOCKS、用户名密码认证、路径或查询
+参数。Windows 需要 WebView2；macOS 的原生代理能力需要 macOS 14 或更高版本。
+
+窗口会立即加载目标页面。出口 IP 与归属地由后台线程通过固定的第三方服务查询，
+不会等待查询结束才放行 WebView。查询成功后，可见窗口标题会变为类似：
+
+```text
+[已进入代理模式 · 203.0.113.8 · 中国 / 上海市 / 上海] Agent Webview
+```
+
+隐藏窗口或程序化调用应使用独立状态接口：
+
+```python
+proxy = client.get(
+    f"/v1/sessions/{session_id}/proxy",
+    params={"timeout": 10},
+).raise_for_status().json()
+
+if proxy["state"] == "active":
+    print(proxy["server"], proxy["ip"], proxy["location"])
+```
+
+`timeout` 默认为 `0`，此时立即返回；可设置为最多 30 秒，仅让这一次状态请求等待
+后台查询，不影响 WebView。响应中的状态含义如下：
+
+- `disabled`：该窗口没有声明代理。
+- `checking`：窗口已按代理配置启动，出口信息仍在后台查询。
+- `active`：固定查询服务已通过该代理成功返回出口 IP 和归属地。
+- `unavailable`：本次查询没有结果；页面继续正常工作，该状态本身不能断定代理失败。
+
+查询完成时也会产生 `proxy` 事件，可通过现有事件长轮询接口监听。查询服务地址固定
+在实现内部，不接受 CLI 或 HTTP API 覆盖。
+
 ## 🔎 页面观测
 
 通过 `PUT /v1/sessions/{id}/instrumentation` 可以开启：
@@ -192,7 +250,7 @@ with httpx.Client(
 
 随后使用 `GET /v1/sessions/{id}/events?after=0&timeout=20` 长轮询事件，下一次
 请求将返回的 `latest_sequence` 作为 `after`。`kinds` 参数可过滤
-`dom`、`network`、`mutation` 和 `lifecycle`。
+`dom`、`network`、`mutation`、`lifecycle` 和 `proxy`。
 
 网络探针不是浏览器底层代理，不能保证捕获 Service Worker、缓存命中、扩展流量
 或所有响应体。需要协议级调试时，可以在创建会话时设置
@@ -223,12 +281,13 @@ Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到�
 | `--data-dir` | 当前用户数据目录 | Cookie 快照目录 |
 | `--runtime-dir` | 当前用户运行目录 | worker 运行文件目录 |
 | `--runtime-file` | 当前用户运行目录 | 控制器运行信息文件 |
+| `--proxy` | 关闭 | 所有新窗口使用的 HTTP/HTTPS 代理 |
 | `--allow-remote` | 关闭 | 允许监听非本机地址 |
 | `--log-level` | `info` | 日志级别 |
 | `--json-logs` | 关闭 | 输出 JSON 日志 |
 
 固定 Token 时优先使用 `AGENT_WEBVIEW_TOKEN` 环境变量，避免令牌出现在命令历史
-和进程参数中。
+和进程参数中。全局代理也可以通过 `AGENT_WEBVIEW_PROXY` 设置。
 
 ## 🔐 安全说明
 
@@ -237,6 +296,7 @@ Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到�
 
 - 只在可信设备和可信网络中运行。
 - 不要共享运行信息文件、Token 或 Cookie 快照。
+- 代理窗口会把出口 IP 发送给内置的第三方归属地查询服务。
 - 默认只监听本机；非本机地址必须显式传入 `--allow-remote`。
 - 任务结束后删除会话，释放 worker 进程和 WebView 资源。
 - 安全问题请按照[安全策略](https://github.com/Yuv96/agent-webview/security/policy)私下报告。
@@ -248,7 +308,8 @@ Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到�
 - 控制器重启不会恢复仍在运行的 worker 会话。
 - DOM `click()` 不等同于操作系统级鼠标事件。
 - 当前不提供截图接口，因为 pywebview 没有统一的跨后端页面截图 API。
-- 该项目用于 WebView 调试和页面检查，不是完整浏览器自动化框架或网络代理。
+- 该项目可以把 WebView 流量转交给已有代理，但本身不是代理服务器，也不是完整的
+  浏览器自动化框架。
 
 公共兼容范围和版本规则见
 [API 稳定性说明](https://github.com/Yuv96/agent-webview/blob/main/docs/api-stability.md)。

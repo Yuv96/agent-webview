@@ -17,6 +17,7 @@ from agent_webview.events import EventBuffer
 from agent_webview.files import write_private_json
 from agent_webview.logging import configure_logging
 from agent_webview.models import CookieRecord
+from agent_webview.proxy import ProxyConfigurationError, configure_browser_proxy
 from agent_webview.runtime import BrowserRuntime
 from agent_webview.worker_api import create_worker_app
 
@@ -40,6 +41,16 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def run_worker(config: dict[str, Any]) -> int:
     import webview
 
+    proxy_config = config.get("proxy") or {}
+    proxy_url = proxy_config.get("url")
+    if proxy_url:
+        try:
+            configure_browser_proxy(proxy_url)
+        except ProxyConfigurationError as error:
+            _write_json(Path(config["ready_file"]), {"error": str(error)})
+            log.error("浏览器代理配置失败", error=str(error))
+            return 2
+
     events = EventBuffer(capacity=int(config.get("event_capacity", 5000)))
     bridge = AgentBridge(events)
     api = AgentApi(bridge)
@@ -52,6 +63,10 @@ def run_worker(config: dict[str, Any]) -> int:
             CookieRecord.model_validate(item)
             for item in config.get("cookies", [])
         ],
+        title=config["title"],
+        requested_url=config["url"],
+        proxy_url=proxy_url,
+        proxy_scope=proxy_config.get("scope"),
     )
 
     app = create_worker_app(runtime, config["token"])
@@ -89,8 +104,8 @@ def run_worker(config: dict[str, Any]) -> int:
     webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
 
     window = webview.create_window(
-        config["title"],
-        url=config["url"],
+        runtime.initial_title,
+        url=runtime.startup_url,
         width=config["width"],
         height=config["height"],
         hidden=not config["visible"],
@@ -110,6 +125,7 @@ def run_worker(config: dict[str, Any]) -> int:
                 "port": port,
             },
         )
+        runtime.start_proxy_lookup()
         log.info("子进程已启动", session_id=config["session_id"], pid=os.getpid())
 
     try:
