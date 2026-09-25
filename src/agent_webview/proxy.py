@@ -83,12 +83,7 @@ def parse_ip_lookup_document(document: Any) -> ProxyIdentity:
     except ValueError as error:
         raise ValueError("IP 查询结果缺少有效地址") from error
 
-    location_parts: list[str] = []
-    for key in ("country", "region", "city"):
-        part = str(payload.get(key) or "").strip()
-        if part and part not in location_parts:
-            location_parts.append(part)
-    location = " / ".join(location_parts) or "未知归属地"
+    location = str(payload.get("city") or "").strip() or "未知归属地"
     return ProxyIdentity(ip=normalized_ip, location=location)
 
 
@@ -114,8 +109,8 @@ def format_proxy_title(
     location: str | None = None,
 ) -> str:
     if state == "active" and ip:
-        suffix = f" · {location}" if location else ""
-        return f"[已进入代理模式 · {ip}{suffix}] {base_title}"
+        suffix = f" · {location}" if location and location != "未知归属地" else ""
+        return f"[{ip}{suffix}] {base_title}"
     if state in {"checking", "unavailable"}:
         return f"[代理模式] {base_title}"
     return base_title

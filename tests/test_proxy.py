@@ -49,13 +49,13 @@ def test_ip_lookup_document_builds_location_and_title() -> None:
     )
 
     assert identity.ip == "203.0.113.8"
-    assert identity.location == "中国 / 上海市 / 上海"
+    assert identity.location == "上海"
     assert format_proxy_title(
         "调试窗口",
         state="active",
         ip=identity.ip,
         location=identity.location,
-    ) == "[已进入代理模式 · 203.0.113.8 · 中国 / 上海市 / 上海] 调试窗口"
+    ) == "[203.0.113.8 · 上海] 调试窗口"
 
 
 def test_failed_ip_lookup_document_is_rejected() -> None:
@@ -95,6 +95,10 @@ def test_proxy_identity_lookup_uses_fixed_service_and_explicit_proxy(
     identity = lookup_proxy_identity("http://127.0.0.1:7890")
 
     assert identity.ip == "203.0.113.9"
+    assert identity.location == "未知归属地"
+    assert format_proxy_title(
+        "调试窗口", state="active", ip=identity.ip, location=identity.location
+    ) == "[203.0.113.9] 调试窗口"
     assert observed["proxy"] == "http://127.0.0.1:7890"
     assert observed["trust_env"] is False
     assert observed["url"] == IP_LOOKUP_URL

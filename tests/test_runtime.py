@@ -183,7 +183,7 @@ def test_runtime_loads_page_while_proxy_lookup_runs_and_updates_title() -> None:
         assert proxy_url == "http://127.0.0.1:7890"
         lookup_started.set()
         assert release_lookup.wait(2)
-        return ProxyIdentity(ip="198.51.100.4", location="中国 / 香港")
+        return ProxyIdentity(ip="198.51.100.4", location="香港")
 
     runtime = BrowserRuntime(
         session_id="session-1",
@@ -218,12 +218,10 @@ def test_runtime_loads_page_while_proxy_lookup_runs_and_updates_title() -> None:
         "server": "http://127.0.0.1:7890",
         "state": "active",
         "ip": "198.51.100.4",
-        "location": "中国 / 香港",
+        "location": "香港",
     }
     assert window.url == "https://example.org/"
-    assert window.title == (
-        "[已进入代理模式 · 198.51.100.4 · 中国 / 香港] 代理调试"
-    )
+    assert window.title == "[198.51.100.4 · 香港] 代理调试"
     proxy_events = events.get(after=0, limit=10, kinds=["proxy"]).events
     assert proxy_events[0]["payload"]["event"] == "active"
 

@@ -226,8 +226,11 @@ loading never waits for this lookup. After success, a visible window title
 looks like:
 
 ```text
-[已进入代理模式 · 203.0.113.8 · China / Shanghai / Shanghai] Agent Webview
+[203.0.113.8 · Shanghai] Agent Webview
 ```
+
+Only the city is retained as the location. If no city is returned, the title
+shows only the exit IP.
 
 For hidden windows and programmatic callers, use the dedicated status endpoint:
 
