@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
 from typing import Any, Literal
 
 import structlog
@@ -29,12 +29,14 @@ from agent_webview.models import (
     DomListenerRequest,
     DomQueryRequest,
     InstrumentationRequest,
+    ProxyUpdateRequest,
 )
 from agent_webview.proxy import (
     ProxyIdentity,
     format_proxy_title,
     lookup_proxy_identity,
 )
+from agent_webview.proxy_relay import ProxyRelay, ProxyTarget
 
 log = structlog.get_logger(__name__)
 
@@ -53,6 +55,8 @@ class BrowserRuntime:
         proxy_url: str | None = None,
         proxy_scope: Literal["global", "window"] | None = None,
         proxy_lookup: Callable[[str], ProxyIdentity] = lookup_proxy_identity,
+        proxy_relay: ProxyRelay | None = None,
+        proxy_authenticated: bool = False,
     ) -> None:
         self.session_id = session_id
         self.window_id = window_id
@@ -71,7 +75,8 @@ class BrowserRuntime:
         self._requested_url = requested_url
         self._proxy_url = proxy_url
         self._proxy_lookup = proxy_lookup
-        self._proxy_lock = Lock()
+        self._proxy_relay = proxy_relay
+        self._proxy_lock = RLock()
         self._proxy_lookup_started = False
         self._proxy_lookup_finished = Event()
         if proxy_url is None:
@@ -83,6 +88,9 @@ class BrowserRuntime:
             "state": "checking" if proxy_url else "disabled",
             "ip": None,
             "location": None,
+            "revision": 0,
+            "mutable": proxy_relay is not None and proxy_scope == "window",
+            "authenticated": proxy_authenticated,
         }
 
     @property
@@ -123,7 +131,11 @@ class BrowserRuntime:
         self.events.append("lifecycle", {"event": "shown"})
 
     def _on_closed(self, *_: Any) -> None:
-        self.closed = True
+        with self._proxy_lock:
+            self.closed = True
+            self._proxy_lookup_finished.set()
+        if self._proxy_relay is not None:
+            self._proxy_relay.close()
         self.bridge.ready.clear()
         self.events.append("lifecycle", {"event": "closed"})
 
@@ -132,21 +144,66 @@ class BrowserRuntime:
             if not self._proxy_url or self._proxy_lookup_started:
                 return
             self._proxy_lookup_started = True
-        Thread(target=self._complete_proxy_lookup, daemon=True).start()
+            revision = self._proxy_status["revision"]
+            proxy_url = self._proxy_relay.url if self._proxy_relay else self._proxy_url
+            finished = self._proxy_lookup_finished
+        Thread(
+            target=self._complete_proxy_lookup,
+            args=(revision, proxy_url, finished),
+            daemon=True,
+        ).start()
 
-    def _complete_proxy_lookup(self) -> None:
-        assert self._proxy_url is not None
+    def _complete_proxy_lookup(self, revision: int, proxy_url: str, finished: Event) -> None:
         try:
-            identity = self._proxy_lookup(self._proxy_url)
+            identity = self._proxy_lookup(proxy_url)
         except Exception as error:
             log.debug(
                 "代理出口 IP 查询未完成",
                 session_id=self.session_id,
                 error_type=type(error).__name__,
             )
-            self._set_proxy_unavailable()
-        else:
-            self._set_proxy_active(identity.ip, identity.location)
+            identity = None
+        with self._proxy_lock:
+            if self.closed or revision != self._proxy_status["revision"]:
+                finished.set()
+                return
+            if identity is None:
+                self._set_proxy_unavailable()
+            else:
+                self._set_proxy_active(identity.ip, identity.location)
+
+    def update_proxy(self, request: ProxyUpdateRequest) -> dict[str, Any]:
+        target = ProxyTarget(request.proxy, request.proxy_username, request.proxy_password)
+        with self._proxy_lock:
+            if self.closed:
+                raise BrowserNotReadyError("窗口已经关闭")
+            if not self._proxy_status["mutable"] or self._proxy_relay is None:
+                raise BrowserNotReadyError("仅创建时配置单窗口代理的会话支持切换；全局代理不可修改")
+            revision = self._proxy_status["revision"]
+            if request.expected_revision is not None and request.expected_revision != revision:
+                raise BrowserNotReadyError("代理版本已变化，请读取当前状态后重试")
+            try:
+                self._proxy_relay.replace(target)
+            except (ValueError, RuntimeError) as error:
+                raise BrowserNotReadyError(str(error)) from error
+            self._proxy_url = target.url
+            self._proxy_lookup_finished.set()
+            self._proxy_lookup_finished = Event()
+            self._proxy_lookup_started = False
+            self._proxy_status.update(
+                server=target.url,
+                state="checking",
+                ip=None,
+                location=None,
+                revision=revision + 1,
+                authenticated=target.username is not None,
+            )
+            self._update_proxy_title()
+            self.events.append("proxy", {"event": "changed", "revision": revision + 1, "server": target.url})
+            # 返回已应用代次的快照；出口检查异步完成，不阻塞窗口使用。
+            result = dict(self._proxy_status)
+            self.start_proxy_lookup()
+            return result
 
     def _set_proxy_active(self, ip: str, location: str) -> None:
         with self._proxy_lock:

@@ -27,6 +27,9 @@ def _window() -> dict[str, Any]:
             "state": "disabled",
             "ip": None,
             "location": None,
+            "revision": 0,
+            "mutable": False,
+            "authenticated": False,
         },
         "bounds": {"x": 0, "y": 0, "width": 1280, "height": 900},
         "latest_event_sequence": 0,
@@ -167,3 +170,25 @@ def test_proxy_status_endpoint_supports_hidden_sessions(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json() == _window()["proxy"]
+
+
+def test_proxy_update_is_authenticated_forwarded_and_documented(tmp_path):
+    from unittest.mock import Mock
+
+    manager = FakeManager(tmp_path)
+    manager.request = Mock(return_value={**_window()["proxy"], "revision": 1, "mutable": True})
+    with TestClient(create_controller_app(manager, "token")) as client:
+        path = "/v1/sessions/session-1/proxy"
+        body = {"proxy": "http://proxy.example:80", "proxy_username": "user", "proxy_password": "secret", "expected_revision": 0}  # pragma: allowlist secret
+        assert client.put(path, json=body).status_code == 401
+        headers = {"Authorization": "Bearer token"}
+        response = client.put(path, json=body, headers=headers)
+        assert response.status_code == 200
+        assert response.json()["revision"] == 1
+        assert "secret" not in response.text
+        assert manager.request.call_args.kwargs["json_body"] == body
+        invalid = client.put(path, json={**body, "proxy": "http://user:secret@host:80"}, headers=headers)
+        assert invalid.status_code == 422
+        assert "secret" not in invalid.text
+        schema = client.get("/openapi.json").json()
+        assert "put" in schema["paths"]["/v1/sessions/{session_id}/proxy"]

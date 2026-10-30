@@ -171,6 +171,7 @@ Once the service is running, open the `docs_url` from the runtime file or visit
 | `GET` | `/v1/sessions` | List sessions and process information |
 | `GET` | `/v1/sessions/{id}` | Read window, handle, and process state |
 | `GET` | `/v1/sessions/{id}/proxy` | Read proxy configuration, exit IP, and location |
+| `PUT` | `/v1/sessions/{id}/proxy` | Change the upstream proxy for an open per-window proxy session |
 | `DELETE` | `/v1/sessions/{id}` | Destroy a session |
 | `POST` | `/v1/sessions/{id}/navigate` | Navigate to another URL |
 | `POST` | `/v1/sessions/{id}/javascript/evaluate` | Evaluate an expression and return its value |
@@ -216,9 +217,47 @@ session = client.post(
 
 The global proxy takes precedence over a per-window value so that every window
 under that controller uses the same route. Proxy URLs may use `http://` or
-`https://`. SOCKS, username/password authentication, paths, and query strings
-are not currently supported. Windows requires WebView2, and native proxy
-configuration on macOS requires macOS 14 or later.
+`https://`. SOCKS, paths, and query strings are not supported. Per-window proxies
+support HTTP Basic credentials: supply both `proxy_username` and `proxy_password`
+on creation, rather than embedding credentials in the URL. Windows requires
+WebView2; macOS requires macOS 14 or later.
+
+### Change an open window's proxy
+
+Sessions created with a per-window `proxy` can switch upstreams while preserving
+the window, cookies, JavaScript state, and unfinished inputs. No page reload occurs:
+
+```python
+current = client.get(f"/v1/sessions/{session_id}/proxy").raise_for_status().json()
+changed = client.put(
+    f"/v1/sessions/{session_id}/proxy",
+    json={
+        "proxy": "http://127.0.0.1:7891",
+        "proxy_username": proxy_username,
+        "proxy_password": proxy_password,
+        "expected_revision": current["revision"],
+    },
+).raise_for_status().json()
+```
+
+Omit both credential fields for an unauthenticated upstream; omission clears
+previous credentials. Optional `expected_revision` rejects concurrent changes
+with `409` when the revision differs. `proxy` is required and cannot be `null`;
+the operation never implicitly enables a direct connection.
+
+`ProxyStatus` adds `revision` (starting at 0), `mutable`, and `authenticated`.
+A successful update means the upstream was replaced; `state=checking` while
+exit lookup runs asynchronously. It does not guarantee upstream connectivity.
+Unconfigured, globally proxied, or closed windows return `409`. Global proxies
+remain immutable. Status, titles, and proxy events never return credentials.
+
+Each per-window proxy uses a fixed loopback relay bound to `127.0.0.1`. Switching
+closes every old HTTP connection and CONNECT tunnel, including WebSockets and
+in-flight requests. New requests use the new upstream. Interrupted submissions
+are not automatically retried, and authentication/connection failure never falls
+back to direct networking. Switch after critical submissions finish. Preserved
+cookies do not guarantee that a website accepts a changed login IP. The component
+does not purchase, extract, or automatically renew proxy IPs.
 
 The target page starts loading immediately. A background thread queries a
 fixed third-party service through the proxy for its exit IP and location; page
@@ -255,7 +294,9 @@ waits only on that status request, never on the WebView. States mean:
 - `unavailable`: this lookup produced no result. The page continues normally,
   and this state alone does not prove the proxy failed.
 
-Completion also emits a `proxy` event through the existing event stream. The
+Applying a switch emits a `changed` proxy event with `revision` and a credential-free
+`server`. Stale lookups cannot overwrite the current revision. Completion also
+emits a `proxy` event through the existing event stream. The
 lookup service URL is fixed internally and cannot be overridden through the
 CLI or HTTP API.
 
@@ -342,8 +383,9 @@ browser cookies. Keep it within these boundaries:
 - DOM `click()` is not equivalent to an operating-system mouse event.
 - Screenshots are not currently exposed because pywebview has no uniform
   cross-backend page screenshot API.
-- This project can route WebView traffic to an existing proxy, but it is not a
-  proxy server or a complete browser automation framework.
+- Per-window proxies include a local relay for that session only. This project
+  does not provide a public proxy service, proxy IP inventory, or a complete
+  browser automation framework.
 
 See the
 [API stability policy](https://github.com/Yuv96/agent-webview/blob/main/docs/api-stability.md)

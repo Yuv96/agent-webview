@@ -27,6 +27,7 @@ from agent_webview.models import (
     JavaScriptRequest,
     NavigateRequest,
     ProxyStatus,
+    ProxyUpdateRequest,
     SessionCreateRequest,
     SessionDescription,
     SessionDestroyResponse,
@@ -136,6 +137,10 @@ def create_controller_app(manager: SessionManager, token: str) -> FastAPI:
     @router.delete("/sessions/{session_id}", response_model=SessionDestroyResponse)
     def destroy_session(session_id: str) -> dict[str, Any]:
         return manager.destroy(session_id)
+
+    @router.put("/sessions/{session_id}/proxy", response_model=ProxyStatus)
+    def update_proxy(session_id: str, request: ProxyUpdateRequest) -> dict[str, Any]:
+        return call(session_id, "PUT", "/v1/proxy", body=request.model_dump())
 
     @router.post("/sessions/{session_id}/window/show", response_model=WindowStatus)
     def show_window(session_id: str) -> dict[str, Any]:

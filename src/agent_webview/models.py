@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from agent_webview.proxy import normalize_proxy_url
 
@@ -29,6 +29,9 @@ class ProxyStatus(ApiResponse):
     state: Literal["disabled", "checking", "active", "unavailable"]
     ip: str | None
     location: str | None
+    revision: int = 0
+    mutable: bool = False
+    authenticated: bool = False
 
 
 class WindowStatus(ApiResponse):
@@ -143,7 +146,31 @@ class CookieRecord(BaseModel):
     same_site: Literal["Strict", "Lax", "None"] | None = None
 
 
-class SessionCreateRequest(BaseModel):
+class ProxyCredentials(BaseModel):
+    proxy_username: str | None = Field(default=None, min_length=1, max_length=512, repr=False)
+    proxy_password: str | None = Field(default=None, min_length=1, max_length=512, repr=False)
+
+    @model_validator(mode="after")
+    def validate_credentials(self):
+        if (self.proxy_username is None) != (self.proxy_password is None):
+            raise ValueError("代理用户名和密码必须同时提供")
+        if self.proxy_username and ":" in self.proxy_username:
+            raise ValueError("代理用户名不能包含冒号")
+        return self
+
+
+class ProxyUpdateRequest(ProxyCredentials):
+    model_config = ConfigDict(extra="forbid")
+    proxy: str
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @field_validator("proxy")
+    @classmethod
+    def validate_proxy(cls, value: str) -> str:
+        return normalize_proxy_url(value)
+
+
+class SessionCreateRequest(ProxyCredentials):
     url: str | None = None
     title: str = "Agent Webview"
     width: int = Field(default=1280, ge=320, le=8192)
@@ -155,6 +182,12 @@ class SessionCreateRequest(BaseModel):
     remote_debugging_port: int | None = Field(default=None, ge=1024, le=65535)
     gui: str | None = None
     proxy: str | None = None
+
+    @model_validator(mode="after")
+    def credentials_require_proxy(self):
+        if self.proxy_username is not None and self.proxy is None:
+            raise ValueError("代理认证需要提供窗口代理地址")
+        return self
 
     @field_validator("url")
     @classmethod

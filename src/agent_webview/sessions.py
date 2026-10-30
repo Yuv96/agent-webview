@@ -86,7 +86,7 @@ class SessionManager:
         effective_proxy = self.proxy or request.proxy
         proxy_scope = "global" if self.proxy else ("window" if request.proxy else None)
         config = {
-            **request.model_dump(exclude={"snapshot_id", "cookies", "proxy"}),
+            **request.model_dump(exclude={"snapshot_id", "cookies", "proxy", "proxy_username", "proxy_password"}),
             "url": url,
             "cookies": cookies,
             "proxy": (
@@ -102,6 +102,11 @@ class SessionManager:
             "log_level": self.log_level,
             "json_logs": self.json_logs,
         }
+        if effective_proxy and not self.proxy and request.proxy_username is not None:
+            config["proxy"].update(
+                username=request.proxy_username,
+                password=request.proxy_password,
+            )
         write_private_json(config_file, config)
         process = subprocess.Popen(
             [

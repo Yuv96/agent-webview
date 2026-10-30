@@ -219,6 +219,9 @@ def test_runtime_loads_page_while_proxy_lookup_runs_and_updates_title() -> None:
         "state": "active",
         "ip": "198.51.100.4",
         "location": "香港",
+        "revision": 0,
+        "mutable": False,
+        "authenticated": False,
     }
     assert window.url == "https://example.org/"
     assert window.title == "[198.51.100.4 · 香港] 代理调试"
@@ -257,3 +260,90 @@ def test_runtime_keeps_proxy_mode_visible_when_ip_lookup_fails() -> None:
     assert window.url == "https://example.com/"
     proxy_events = events.get(after=0, limit=10, kinds=["proxy"]).events
     assert proxy_events[0]["payload"] == {"event": "unavailable"}
+
+
+def test_proxy_switch_preserves_window_and_ignores_stale_lookup(monkeypatch):
+    from threading import Thread
+
+    from agent_webview.models import ProxyUpdateRequest
+    from agent_webview.proxy_relay import ProxyRelay, ProxyTarget
+
+    started, release, old_finished = Event(), Event(), Event()
+    calls = []
+    threads = []
+
+    def lookup_thread(*args, **kwargs):
+        thread = Thread(*args, **kwargs)
+        threads.append(thread)
+        return thread
+
+    monkeypatch.setattr("agent_webview.runtime.Thread", lookup_thread)
+
+    def lookup(url):
+        calls.append(url)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(3)
+            old_finished.set()
+            return ProxyIdentity("192.0.2.1", "旧城市")
+        return ProxyIdentity("192.0.2.2", "新城市")
+
+    relay = ProxyRelay(ProxyTarget("http://127.0.0.1:7001"))
+    runtime = BrowserRuntime(
+        session_id="session-1", window_id="window-1", bridge=FakeBridge(),
+        events=EventBuffer(), proxy_url="http://127.0.0.1:7001",
+        proxy_scope="window", proxy_relay=relay, proxy_lookup=lookup,
+    )
+    window = FakeWindow()
+    runtime.attach_window(window, visible=True)
+    runtime.operational_ready.set()
+    try:
+        runtime.start_proxy_lookup()
+        assert started.wait(2)
+        old_done = runtime._proxy_lookup_finished
+        result = runtime.update_proxy(ProxyUpdateRequest(
+            proxy="http://127.0.0.1:7002", proxy_username="user",
+            proxy_password="secret", expected_revision=0,  # pragma: allowlist secret
+        ))
+        assert result["revision"] == 1
+        assert result["state"] == "checking"
+        assert result["ip"] is None
+        assert result["authenticated"] is True
+        assert "secret" not in str(result)
+        assert runtime.proxy_status(2)["ip"] == "192.0.2.2"
+        release.set()
+        assert old_finished.wait(2)
+        threads[0].join(2)
+        assert not threads[0].is_alive()
+        assert old_done.wait(2)
+        assert runtime.proxy_status()["ip"] == "192.0.2.2"
+        assert window.title == "[192.0.2.2 · 新城市] Agent Webview"
+        assert window.url == "https://example.com/"
+        assert window.scripts == []
+        assert not window.cleared and not window.destroyed
+        assert runtime.operational_ready.is_set()
+        with pytest.raises(BrowserNotReadyError, match="版本"):
+            runtime.update_proxy(ProxyUpdateRequest(proxy="http://127.0.0.1:7003", expected_revision=0))
+        assert runtime.proxy_status()["revision"] == 1
+        assert calls == [relay.url, relay.url]
+    finally:
+        release.set()
+        runtime._on_closed()
+
+
+@pytest.mark.parametrize("scope", [None, "global"])
+def test_proxy_switch_rejects_unconfigured_or_global_sessions(scope):
+    from agent_webview.models import ProxyUpdateRequest
+
+    runtime = BrowserRuntime(
+        session_id="s", window_id="w", bridge=FakeBridge(), events=EventBuffer(),
+        proxy_url="http://127.0.0.1:7001" if scope else None, proxy_scope=scope,
+    )
+    runtime.attach_window(FakeWindow(), visible=False)
+    before = runtime.proxy_status()
+    with pytest.raises(BrowserNotReadyError):
+        runtime.update_proxy(ProxyUpdateRequest(proxy="http://127.0.0.1:7002"))
+    assert runtime.proxy_status() == before
+    runtime._on_closed()
+    with pytest.raises(BrowserNotReadyError, match="关闭"):
+        runtime.update_proxy(ProxyUpdateRequest(proxy="http://127.0.0.1:7002"))

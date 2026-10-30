@@ -165,6 +165,7 @@ with httpx.Client(
 | `GET` | `/v1/sessions` | 列出会话和进程信息 |
 | `GET` | `/v1/sessions/{id}` | 获取窗口、句柄和进程状态 |
 | `GET` | `/v1/sessions/{id}/proxy` | 查询代理配置、出口 IP 和归属地 |
+| `PUT` | `/v1/sessions/{id}/proxy` | 为已打开的单窗口代理会话切换上游代理 |
 | `DELETE` | `/v1/sessions/{id}` | 销毁会话 |
 | `POST` | `/v1/sessions/{id}/navigate` | 导航到新地址 |
 | `POST` | `/v1/sessions/{id}/javascript/evaluate` | 执行表达式并返回结果 |
@@ -206,8 +207,42 @@ session = client.post(
 ```
 
 全局代理优先于创建请求中的窗口代理，保证该控制器下的所有窗口使用同一代理。
-代理地址支持 `http://` 和 `https://`，暂不支持 SOCKS、用户名密码认证、路径或查询
-参数。Windows 需要 WebView2；macOS 的原生代理能力需要 macOS 14 或更高版本。
+代理地址支持 `http://` 和 `https://`，暂不支持 SOCKS、路径或查询参数。单窗口代理
+支持 HTTP Basic 账密认证：创建请求中同时传入 `proxy_username`、`proxy_password`，
+不要把账密拼进 `proxy` URL。Windows 需要 WebView2；macOS 需要 macOS 14 或更高版本。
+
+### 在已打开窗口中切换代理
+
+创建时配置了单窗口 `proxy` 的会话，可以保持窗口、Cookie、页面 JS 状态和输入内容，
+通过以下接口切换上游，不会自动刷新页面：
+
+```python
+current = client.get(f"/v1/sessions/{session_id}/proxy").raise_for_status().json()
+changed = client.put(
+    f"/v1/sessions/{session_id}/proxy",
+    json={
+        "proxy": "http://127.0.0.1:7891",
+        "proxy_username": proxy_username,
+        "proxy_password": proxy_password,
+        "expected_revision": current["revision"],
+    },
+).raise_for_status().json()
+```
+
+不需要认证时省略两个账密字段；省略会清除旧认证，不会继承旧密码。
+`expected_revision` 可选，指定时版本不匹配返回 `409`，避免并发切换相互覆盖。
+`proxy` 必填，不接受 `null`，不会隐式切换为直连。
+
+响应沿用 `ProxyStatus`，增加 `revision`（从 0 开始）、`mutable`、`authenticated`。
+成功响应表示上游已替换，`state=checking`，出口信息异步更新；它不保证上游已经连通。
+未配置代理、使用全局代理或已经关闭的窗口不支持此操作，返回 `409`。
+全局代理仍保持不可修改。状态、标题和代理事件不返回用户名或密码。
+
+单窗口会话通过仅监听 `127.0.0.1` 的固定入口连接上游。切换会断开所有旧 HTTP
+连接和 CONNECT 隧道，包括 WebSocket 或正在传输的请求；新请求使用新上游。
+组件不自动重试被中断的提交，也不在认证或连接失败时回退直连。
+调用方应在关键提交结束后切换；Cookie 保留不代表目标网站一定接受换 IP 后的登录态。
+这项能力不负责购买、提取或自动续期代理 IP。
 
 窗口会立即加载目标页面。出口 IP 与归属地由后台线程通过固定的第三方服务查询，
 不会等待查询结束才放行 WebView。查询成功后，可见窗口标题会变为类似：
@@ -238,7 +273,9 @@ if proxy["state"] == "active":
 - `active`：固定查询服务已通过该代理成功返回出口 IP 和归属地。
 - `unavailable`：本次查询没有结果；页面继续正常工作，该状态本身不能断定代理失败。
 
-查询完成时也会产生 `proxy` 事件，可通过现有事件长轮询接口监听。查询服务地址固定
+切换应用时产生包含 `revision` 和无账密 `server` 的 `changed` 代理事件；
+旧版本的后台查询结果不会覆盖新版本状态。查询完成时也会产生 `proxy` 事件，
+可通过现有事件长轮询接口监听。查询服务地址固定
 在实现内部，不接受 CLI 或 HTTP API 覆盖。
 
 ## 🔎 页面观测
@@ -310,8 +347,8 @@ Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到�
 - 控制器重启不会恢复仍在运行的 worker 会话。
 - DOM `click()` 不等同于操作系统级鼠标事件。
 - 当前不提供截图接口，因为 pywebview 没有统一的跨后端页面截图 API。
-- 该项目可以把 WebView 流量转交给已有代理，但本身不是代理服务器，也不是完整的
-  浏览器自动化框架。
+- 单窗口代理包含本机转发入口，仅用于当前会话；本项目不提供公共代理服务或代理
+  IP 资源，也不是完整的浏览器自动化框架。
 
 公共兼容范围和版本规则见
 [API 稳定性说明](https://github.com/Yuv96/agent-webview/blob/main/docs/api-stability.md)。

@@ -18,6 +18,7 @@ from agent_webview.files import write_private_json
 from agent_webview.logging import configure_logging
 from agent_webview.models import CookieRecord
 from agent_webview.proxy import ProxyConfigurationError, configure_browser_proxy
+from agent_webview.proxy_relay import ProxyRelay, ProxyTarget
 from agent_webview.runtime import BrowserRuntime
 from agent_webview.worker_api import create_worker_app
 
@@ -39,13 +40,27 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def run_worker(config: dict[str, Any]) -> int:
+    proxy_config = config.get("proxy") or {}
+    relay = None
+    try:
+        if proxy_config.get("url") and proxy_config.get("scope") == "window":
+            relay = ProxyRelay(ProxyTarget(
+                proxy_config["url"], proxy_config.get("username"), proxy_config.get("password"),
+            ))
+        return _run_browser(config, relay)
+    finally:
+        if relay is not None:
+            relay.close()
+
+
+def _run_browser(config: dict[str, Any], relay: ProxyRelay | None) -> int:
     import webview
 
     proxy_config = config.get("proxy") or {}
     proxy_url = proxy_config.get("url")
     if proxy_url:
         try:
-            configure_browser_proxy(proxy_url)
+            configure_browser_proxy(relay.url if relay else proxy_url)
         except ProxyConfigurationError as error:
             _write_json(Path(config["ready_file"]), {"error": str(error)})
             log.error("浏览器代理配置失败", error=str(error))
@@ -67,6 +82,8 @@ def run_worker(config: dict[str, Any]) -> int:
         requested_url=config["url"],
         proxy_url=proxy_url,
         proxy_scope=proxy_config.get("scope"),
+        proxy_relay=relay,
+        proxy_authenticated=proxy_config.get("username") is not None,
     )
 
     app = create_worker_app(runtime, config["token"])

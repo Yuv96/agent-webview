@@ -106,3 +106,16 @@ def test_worker_events_have_stable_schema() -> None:
     assert response.status_code == 200
     assert response.json()["events"][0]["kind"] == "lifecycle"
     assert response.json()["latest_sequence"] == 1
+
+
+def test_worker_proxy_update_preserves_conflict_status():
+    from unittest.mock import Mock
+
+    from agent_webview.errors import BrowserNotReadyError
+
+    runtime = FakeRuntime()
+    runtime.update_proxy = Mock(side_effect=BrowserNotReadyError("代理版本已变化"))
+    with TestClient(create_worker_app(runtime, "token")) as client:
+        response = client.put("/v1/proxy", json={"proxy": "http://proxy.example"}, headers={"Authorization": "Bearer token"})
+        assert response.status_code == 409
+        assert response.json()["detail"] == "代理版本已变化"

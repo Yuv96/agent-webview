@@ -183,3 +183,23 @@ def test_worker_proxy_configuration_error_is_preserved(tmp_path) -> None:
 
     with pytest.raises(ProxyConfigurationError, match="macOS 14"):
         SessionManager._wait_ready(FakeProcess(), ready_file)
+
+
+def test_session_credentials_only_reach_private_worker_config(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    process = FakeProcess()
+    monkeypatch.setattr("agent_webview.sessions.subprocess.Popen", lambda *_, **__: process)
+    monkeypatch.setattr(manager, "_wait_ready", lambda *_: {"pid": process.pid, "port": 54321})
+    monkeypatch.setattr(manager, "request", lambda *_, **__: (_ for _ in ()).throw(httpx.ConnectError("不可用")))
+    try:
+        created = manager.create(SessionCreateRequest(proxy="http://proxy.example:80", proxy_username="user", proxy_password="secret"))
+        assert "secret" not in str(created)
+        session = manager.get(created["session_id"])
+        config = json.loads(session.config_file.read_text())
+        assert config["proxy"]["username"] == "user"
+        assert config["proxy"]["password"] == "secret"  # pragma: allowlist secret
+        assert "proxy_password" not in config
+        if os.name != "nt":
+            assert stat.S_IMODE(session.config_file.stat().st_mode) == 0o600
+    finally:
+        manager.close()
