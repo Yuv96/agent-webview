@@ -37,7 +37,7 @@ dependencies = [
     "pydantic>=2.9,<3",
     "pyobjc-framework-Network>=10; sys_platform == 'darwin'",
     "pywebview>=6.2.1,<7",
-    "structlog>=25.1,<26",
+    "structlog>=25.1,<27",
     "uvicorn>=0.34,<1",
 ]
 
