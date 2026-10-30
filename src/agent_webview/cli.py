@@ -12,8 +12,8 @@ from typing import Any
 
 import structlog
 import uvicorn
-from filelock import FileLock, Timeout
 from platformdirs import PlatformDirs
+from portalocker import Lock, LockException
 
 from agent_webview.controller_api import create_controller_app
 from agent_webview.cookies import SnapshotStore
@@ -73,13 +73,14 @@ def _base_url(host: str, port: int) -> str:
 @contextmanager
 def _claim_runtime_file(path: Path) -> Iterator[None]:
     ensure_private_parent(path.parent)
-    lock = FileLock(f"{path}.lock")
+    lock_path = Path(f"{path}.lock")
+    lock = Lock(lock_path, mode="a", timeout=0)
     try:
         lock.acquire(timeout=0)
-    except Timeout as error:
+    except LockException as error:
         raise RuntimeFileInUseError("运行信息文件已被其他服务占用") from error
-    restrict_file_permissions(Path(lock.lock_file))
     try:
+        restrict_file_permissions(lock_path)
         yield
     finally:
         lock.release()

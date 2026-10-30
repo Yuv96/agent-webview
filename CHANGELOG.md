@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-30
+
+### Security
+
+- 用兼容 Python 3.10 的 portalocker 替换存在已知漏洞的 filelock，保留控制器互斥锁；更新锁定的 certifi。
+
 ### Added
 
 - 新增 `PUT /v1/sessions/{id}/proxy`，已打开的单窗口代理会话可更换上游，保留窗口、Cookie 和页面状态。
