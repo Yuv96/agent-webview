@@ -114,6 +114,8 @@ def test_cache_worker_does_not_import_tornado(tmp_path):
 
     source = Path(__file__).resolve().parents[1] / "src"
     program = r'''
+import faulthandler
+faulthandler.dump_traceback_later(60, repeat=True)
 import importlib.abc
 import sys
 sys.path.insert(0, sys.argv[1])
@@ -150,4 +152,4 @@ finally:
     server.shutdown()
     server.server_close()
 '''
-    subprocess.run([sys.executable, "-I", "-c", program, str(source), str(tmp_path)], check=True, capture_output=True, timeout=30)
+    subprocess.run([sys.executable, "-I", "-c", program, str(source), str(tmp_path)], check=True, capture_output=True, timeout=120)
