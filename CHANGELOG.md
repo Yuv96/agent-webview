@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-11-12
+
 ### Added
 
 - 登录快照保存当前 origin 的完整 localStorage，原生 document-start 恢复，兼容旧 Cookie 快照。
@@ -11,6 +13,10 @@
 - 可选 `cache` 依赖提供跨进程 HTTP/HTTPS 磁盘缓存，支持既有代理，临时 CA 仅在当前窗口受信任。
 - 新增存储/缓存单元测试及真实 WebView 冒烟测试；缓存需要 Python 3.12+。
 
+### Security
+
+- 发布检查覆盖 cache extra；记录 Tornado 6.5.10 三项不涉及缓存引擎运行路径的已核查告警，新增禁止加载 Tornado 的隔离测试，详见 SECURITY.md。
+- 缓存代理关闭内置 onboarding 页面，HTTPS 上游保持证书验证。
 
 ## [0.1.4] - 2026-10-30
 
