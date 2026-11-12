@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from threading import Event, Lock, RLock, Thread
@@ -37,6 +38,7 @@ from agent_webview.proxy import (
     lookup_proxy_identity,
 )
 from agent_webview.proxy_relay import ProxyRelay, ProxyTarget
+from agent_webview.storage import storage_capture_expression
 
 log = structlog.get_logger(__name__)
 
@@ -381,6 +383,15 @@ class BrowserRuntime:
         self._require_ready()
         cookies = normalize_pywebview_cookies(self.window.get_cookies())
         return [cookie.model_dump() for cookie in cookies]
+
+    def get_storage_state(self) -> dict[str, Any]:
+        self._require_ready()
+        state = json.loads(self.bridge.execute(storage_capture_expression(), expression=True, timeout=30))
+        cookies = self.get_cookies()
+        # 避免导航期间将一个页面的 Cookie 与另一个 origin 的存储混在一起。
+        if self._safe_current_url() != state["url"]:
+            raise BrowserNotReadyError("保存快照期间页面发生导航，请重试")
+        return {**state, "cookies": cookies}
 
     def clear_cookies(self) -> dict[str, Any]:
         self._require_ready()

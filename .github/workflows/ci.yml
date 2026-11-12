@@ -22,11 +22,11 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
-      - run: uv sync --extra dev
-      - run: uv run ruff check src tests scripts
-      - run: uv run mypy
+      - run: uv sync --extra dev --extra cache
+      - run: uv run --extra dev --extra cache ruff check src tests scripts
+      - run: uv run --extra dev --extra cache mypy
       - run: >-
-          uv run pytest
+          uv run --extra dev --extra cache pytest
           --cov=agent_webview
           --cov-report=term
           --cov-fail-under=70

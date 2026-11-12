@@ -30,7 +30,8 @@ Manage hidden browser sessions, inspect the DOM, execute JavaScript, and observe
 | Page interaction | Navigate, query the DOM, enter text, click elements, and execute JavaScript |
 | Observability | Long-poll DOM events, DOM mutations, and page-level network activity |
 | Proxy debugging | Apply a global or per-window HTTP(S) proxy and resolve its exit IP and location asynchronously |
-| Cookie snapshots | Save cookies and make a best-effort restore in a new session |
+| Login snapshots | Save cookies and current-origin localStorage for new sessions |
+| Resource cache | Optional persistent JS/CSS cache with extension allowlists |
 | Cross-platform | Windows, macOS, and Linux with a GTK or Qt backend |
 
 ## 🧱 Architecture
@@ -320,12 +321,20 @@ into Service Workers, cache hits, extension traffic, or every response body.
 For protocol-level debugging, set `remote_debugging_port` when creating a
 session and use a DevTools protocol supported by the selected backend.
 
-## 🍪 Cookie snapshots
+## 🍪 Login snapshots (cookies + localStorage)
 
 Cookie snapshots are stored in the per-user data directory by default; use
 `--data-dir` to choose another location. Pass a `snapshot_id` when creating a
 new session to attempt a restore. Explicit `cookies` in the request override
-snapshot cookies with the same name, domain, and path.
+snapshot cookies with the same name, domain, and path. The `/cookie-snapshots` routes
+remain compatible. New snapshots include `schema_version: 2` and `local_storage`, an
+origin-to-string-map dictionary. All keys are preserved, including Unicode, empty
+values, special names, and stores with more than 500 keys.
+
+On WKWebView and WebView2, a native document-start script replaces localStorage
+before website scripts run, once per matching origin in that session. Subsequent
+navigation does not overwrite new values, and unrelated origins receive no data.
+Older cookie-only snapshots still load.
 
 Restoration is subject to browser backend limitations:
 
@@ -334,10 +343,59 @@ Restoration is subject to browser backend limitations:
   restore HttpOnly cookies.
 - Domain, SameSite, Secure, expiry, and browser policies may reject individual
   cookies.
-- Snapshots do not contain IndexedDB, Local Storage, Service Workers, or cache.
+- localStorage covers only the current top-level origin at snapshot time, excluding
+  other origins, cross-origin frames, sessionStorage, IndexedDB, and Service Workers.
+- Resource cache is stored independently and is not part of a login snapshot.
 
 Treat cookie snapshots and runtime files as sensitive data and never commit
 them to version control.
+
+## 📦 Persistent resource cache
+
+Install `pip install 'agent-webview[cache]'` with Python 3.12+ (base functionality
+still supports 3.10+), or `uv sync --extra dev --extra cache` from source. Create a session:
+
+```json
+{
+  "url": "https://example.com/",
+  "private_mode": true,
+  "resource_cache": {
+    "enabled": true,
+    "extensions": [".js", ".css"],
+    "max_age_seconds": 604800,
+    "max_resource_bytes": 20971520,
+    "max_total_bytes": 536870912
+  }
+}
+```
+
+Caching is disabled by default. Both private and non-private sessions support it;
+`private_mode` defaults to `true`. API sessions still use separate processes. Shared resources survive workers and controller restarts in
+`<data-dir>/resource-cache/resources.sqlite3`.
+
+Cache hits bypass the network; misses are fetched and saved. Full URLs (including
+query, scheme and port) and Vary-selected request headers form the key. Credentials,
+Origin and content encoding negotiation are always separated; unrelated headers such
+as Referer do not prevent reuse unless named in Vary. CDN resources use their own domains. Only path extensions
+`.js` and `.css` are enabled by default. Supply a complete allowlist to include
+`.mjs`, `.svg`, `.png` or `.html`; extension matching ignores query strings and case.
+
+This opt-in cache-first policy reuses entries for `max_age_seconds` without server
+max-age revalidation. Change versioned URLs, shorten the retention period, or stop
+sessions and delete the database to refresh. Only complete GET/200 responses qualify.
+Range requests, upgrades, `no-store`, `private`, `Vary: *`, `Set-Cookie`, and oversized
+responses are excluded. Defaults are 20 MiB per resource and 512 MiB total entity
+bytes; oldest entries are evicted when full. Requests intercepted by a page or
+Service Worker do not reach this cache.
+
+A worker-local proxy supports HTTP/HTTPS and existing upstream proxies. Upstream TLS
+certificates are still verified; only the current window trusts the temporary CA,
+without changes to system trust. Supported backends: macOS 14+ WKWebView and Windows
+WebView2. Other backends fail explicitly. Browsers may bypass proxies for loopback
+addresses, so localhost caching is not guaranteed. Sites depending on TLS fingerprints
+or client certificates may be incompatible with this proxy mode.
+
+Run `uv run --extra cache python scripts/smoke_storage_cache.py` for native smoke checks.
 
 ## ⚙️ Configuration
 

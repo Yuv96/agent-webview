@@ -42,9 +42,9 @@ REQUIRED_WHEEL_FILES = {
 }
 
 
-def run(command: list[str], *, cwd: Path = ROOT) -> None:
+def run(command: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
     print(f"执行：{' '.join(command)}", flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def project_version() -> str:
@@ -94,6 +94,8 @@ def check_secrets() -> None:
             "run",
             "--extra",
             "dev",
+            "--extra",
+            "cache",
             "detect-secrets",
             "scan",
             *files,
@@ -109,6 +111,38 @@ def check_secrets() -> None:
             f"{name}({len(items)})" for name, items in sorted(findings.items())
         )
         raise RuntimeError(f"敏感信息扫描未通过：{summary}")
+
+
+def audit_requirements(requirements: Path) -> None:
+    # 仅允许已核查的精确包/版本/告警；依据及适用边界见 SECURITY.md。
+    exceptions = {
+        ("tornado", "6.5.10", "CVE-2026-116577"),
+        ("tornado", "6.5.10", "CVE-2026-115927"),
+        ("tornado", "6.5.10", "CVE-2026-116578"),
+    }
+    command = ["uv", "run", "--extra", "dev", "--extra", "cache", "pip-audit",
+               "--requirement", str(requirements), "--format", "json"]
+    print("执行：依赖审计（含 cache extra）", flush=True)
+    result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode not in {0, 1}:
+        raise RuntimeError("依赖审计执行失败")
+    try:
+        report = json.loads(result.stdout)
+    except ValueError as error:
+        raise RuntimeError("依赖审计未返回有效报告") from error
+    rejected = []
+    accepted = []
+    for dependency in report["dependencies"]:
+        for vulnerability in dependency.get("vulns", []):
+            finding = (dependency["name"], dependency["version"], vulnerability["id"])
+            (accepted if finding in exceptions else rejected).append(finding)
+    if rejected:
+        raise RuntimeError(f"依赖存在未豁免的已知漏洞：{rejected}")
+    if result.returncode == 1 and not accepted:
+        raise RuntimeError("依赖审计失败且没有可解释的已核查告警")
+    for name, version, advisory in accepted:
+        print(f"已核查的不适用告警：{name} {version} {advisory}；依据见 SECURITY.md")
+    print("依赖审计通过（无未核查告警）")
 
 
 def archive_names(path: Path) -> list[str]:
@@ -173,6 +207,8 @@ def check_artifacts(artifacts: list[Path], root_text: str) -> None:
 
 
 def clean_install_smoke(wheel: Path, temporary: Path, version: str) -> None:
+    clean_environment = os.environ.copy()
+    clean_environment.pop("PYTHONPATH", None)
     environment = temporary / "venv"
     run(["uv", "venv", str(environment), "--python", ">=3.10"])
     python = (
@@ -191,11 +227,13 @@ def clean_install_smoke(wheel: Path, temporary: Path, version: str) -> None:
             ),
         ],
         cwd=temporary,
+        env=clean_environment,
     )
-    run([str(python), "-m", "agent_webview", "--help"], cwd=temporary)
+    run([str(python), "-m", "agent_webview", "--help"], cwd=temporary, env=clean_environment)
     run(
         [str(python), "-m", "agent_webview", "--print-runtime-file"],
         cwd=temporary,
+        env=clean_environment,
     )
 
 
@@ -217,14 +255,16 @@ def main() -> None:
     version = project_version()
     check_tag(version)
     check_secrets()
-    run(["uv", "run", "--extra", "dev", "ruff", "check", "src", "tests", "scripts"])
-    run(["uv", "run", "--extra", "dev", "mypy"])
+    run(["uv", "run", "--extra", "dev", "--extra", "cache", "ruff", "check", "src", "tests", "scripts"])
+    run(["uv", "run", "--extra", "dev", "--extra", "cache", "mypy"])
     run(
         [
             "uv",
             "run",
             "--extra",
             "dev",
+            "--extra",
+            "cache",
             "pytest",
             "--cov=agent_webview",
             "--cov-report=term",
@@ -243,6 +283,8 @@ def main() -> None:
                 "--quiet",
                 "--locked",
                 "--no-dev",
+                "--extra",
+                "cache",
                 "--no-emit-project",
                 "--no-hashes",
                 "--format",
@@ -251,24 +293,14 @@ def main() -> None:
                 str(requirements),
             ]
         )
-        run(
-            [
-                "uv",
-                "run",
-                "--extra",
-                "dev",
-                "pip-audit",
-                "--requirement",
-                str(requirements),
-            ]
-        )
+        audit_requirements(requirements)
         run(["uv", "build", "--out-dir", str(distribution)])
         artifacts = sorted(
             path
             for path in distribution.iterdir()
             if path.suffix == ".whl" or path.name.endswith(".tar.gz")
         )
-        run(["uv", "run", "--extra", "dev", "twine", "check", *map(str, artifacts)])
+        run(["uv", "run", "--extra", "dev", "--extra", "cache", "twine", "check", *map(str, artifacts)])
         check_artifacts(artifacts, str(ROOT))
         wheel = next(path for path in artifacts if path.suffix == ".whl")
         clean_install_smoke(wheel, temporary, version)

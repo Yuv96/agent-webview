@@ -29,6 +29,7 @@ from agent_webview.models import (
     NavigateResponse,
     ProxyStatus,
     ProxyUpdateRequest,
+    StorageStateResponse,
     WindowStatus,
 )
 from agent_webview.runtime import BrowserRuntime
@@ -161,6 +162,10 @@ def create_worker_app(runtime: BrowserRuntime, token: str) -> FastAPI:
     @router.get("/cookies", response_model=CookiesResponse)
     def get_cookies() -> dict:
         return {"url": runtime.status()["url"], "cookies": runtime.get_cookies()}
+
+    @router.get("/storage-state", response_model=StorageStateResponse)
+    def get_storage_state() -> dict:
+        return runtime.get_storage_state()
 
     @router.delete("/cookies")
     def clear_cookies() -> dict:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -116,6 +118,8 @@ class CookieSnapshot(ApiResponse):
     created_at: str
     cookies: list[dict[str, Any]]
     limitations: list[str]
+    local_storage: dict[str, dict[str, str]] = Field(default_factory=dict)
+    schema_version: int = 1
 
 
 class CookieSnapshotSummary(ApiResponse):
@@ -170,6 +174,44 @@ class ProxyUpdateRequest(ProxyCredentials):
         return normalize_proxy_url(value)
 
 
+class ResourceCacheOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    extensions: list[str] = Field(default_factory=lambda: [".js", ".css"], max_length=50)
+    max_age_seconds: int = Field(default=604800, ge=1, le=31536000)
+    max_resource_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    max_total_bytes: int = Field(default=512 * 1024 * 1024, ge=1, le=10 * 1024**3)
+
+    @field_validator("extensions")
+    @classmethod
+    def validate_extensions(cls, values: list[str]) -> list[str]:
+        result = []
+        for value in values:
+            extension = "." + value.strip().lower().lstrip(".")
+            if not re.fullmatch(r"\.[a-z0-9]+", extension):
+                raise ValueError("缓存后缀必须为扩展名，例如 .js 或 .css")
+            if extension not in result:
+                result.append(extension)
+        if not result:
+            raise ValueError("缓存后缀不能为空")
+        return result
+
+
+class StorageStateResponse(CookiesResponse):
+    local_storage: dict[str, dict[str, str]] = Field(default_factory=dict)
+
+    @field_validator("local_storage")
+    @classmethod
+    def validate_origins(cls, values: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        for origin in values:
+            parsed = urlsplit(origin)
+            if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                    or parsed.path or parsed.query or parsed.fragment
+                    or parsed.username is not None or parsed.password is not None):
+                raise ValueError("localStorage 必须以 HTTP(S) origin 为键")
+        return values
+
+
 class SessionCreateRequest(ProxyCredentials):
     url: str | None = None
     title: str = "Agent Webview"
@@ -177,6 +219,8 @@ class SessionCreateRequest(ProxyCredentials):
     height: int = Field(default=900, ge=240, le=8192)
     visible: bool = False
     user_agent: str | None = None
+    private_mode: bool = True
+    resource_cache: ResourceCacheOptions = Field(default_factory=ResourceCacheOptions)
     snapshot_id: str | None = None
     cookies: list[CookieRecord] = Field(default_factory=list)
     remote_debugging_port: int | None = Field(default=None, ge=1024, le=65535)

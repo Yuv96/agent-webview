@@ -50,6 +50,7 @@ Documentation = "https://github.com/Yuv96/agent-webview#readme"
 Security = "https://github.com/Yuv96/agent-webview/security/policy"
 
 [project.optional-dependencies]
+cache = ["mitmproxy>=12.3.1,<13; python_version >= '3.12'"]
 dev = [
     "detect-secrets>=1.5,<2",
     "httpx2>=2,<3",
@@ -94,3 +95,7 @@ files = ["src/agent_webview"]
 ignore_missing_imports = true
 check_untyped_defs = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["mitmproxy.*"]
+follow_imports = "skip"

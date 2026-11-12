@@ -13,10 +13,12 @@ import structlog
 import uvicorn
 
 from agent_webview.bridge import AgentApi, AgentBridge
+from agent_webview.cache_proxy import CacheProxy
 from agent_webview.events import EventBuffer
 from agent_webview.files import write_private_json
 from agent_webview.logging import configure_logging
-from agent_webview.models import CookieRecord
+from agent_webview.models import CookieRecord, ResourceCacheOptions
+from agent_webview.native import configure_native
 from agent_webview.proxy import ProxyConfigurationError, configure_browser_proxy
 from agent_webview.proxy_relay import ProxyRelay, ProxyTarget
 from agent_webview.runtime import BrowserRuntime
@@ -42,25 +44,38 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 def run_worker(config: dict[str, Any]) -> int:
     proxy_config = config.get("proxy") or {}
     relay = None
+    cache_proxy = None
     try:
         if proxy_config.get("url") and proxy_config.get("scope") == "window":
             relay = ProxyRelay(ProxyTarget(
                 proxy_config["url"], proxy_config.get("username"), proxy_config.get("password"),
             ))
-        return _run_browser(config, relay)
+        cache_options = ResourceCacheOptions.model_validate(config.get("resource_cache", {}))
+        if cache_options.enabled:
+            cache_proxy = CacheProxy(
+                Path(config["cache_directory"]), cache_options,
+                relay.url if relay else proxy_config.get("url"),
+            )
+        return _run_browser(config, relay, cache_proxy)
+    except ProxyConfigurationError as error:
+        _write_json(Path(config["ready_file"]), {"error": str(error)})
+        return 2
     finally:
+        if cache_proxy is not None:
+            cache_proxy.close()
         if relay is not None:
             relay.close()
 
 
-def _run_browser(config: dict[str, Any], relay: ProxyRelay | None) -> int:
+def _run_browser(config: dict[str, Any], relay: ProxyRelay | None, cache_proxy: CacheProxy | None = None) -> int:
     import webview
 
     proxy_config = config.get("proxy") or {}
     proxy_url = proxy_config.get("url")
-    if proxy_url:
+    browser_proxy = cache_proxy.url if cache_proxy else (relay.url if relay else proxy_url)
+    if browser_proxy:
         try:
-            configure_browser_proxy(relay.url if relay else proxy_url)
+            configure_browser_proxy(browser_proxy)
         except ProxyConfigurationError as error:
             _write_json(Path(config["ready_file"]), {"error": str(error)})
             log.error("浏览器代理配置失败", error=str(error))
@@ -130,9 +145,27 @@ def _run_browser(config: dict[str, Any], relay: ProxyRelay | None) -> int:
         text_select=True,
         zoomable=True,
     )
+    assert window is not None
     runtime.attach_window(window, visible=config["visible"])
 
+    initialization_error = False
+
+    def initialize(renderer: str) -> bool:
+        nonlocal initialization_error
+        try:
+            configure_native(renderer, config.get("local_storage", {}), cache_proxy.ca_file if cache_proxy else None)
+        except Exception as error:
+            initialization_error = True
+            message = str(error) if isinstance(error, ProxyConfigurationError) else "原生存储或缓存初始化失败"
+            _write_json(Path(config["ready_file"]), {"error": message})
+            return False
+        return True
+
+    window.events.initialized += initialize
+
     def mark_ready() -> None:
+        if initialization_error:
+            return
         _write_json(
             Path(config["ready_file"]),
             {
@@ -150,7 +183,8 @@ def _run_browser(config: dict[str, Any], relay: ProxyRelay | None) -> int:
             func=mark_ready,
             gui=config.get("gui"),
             debug=False,
-            private_mode=True,
+            private_mode=config.get("private_mode", True),
+            storage_path=config.get("storage_path"),
             user_agent=config.get("user_agent"),
         )
     finally:

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- 登录快照保存当前 origin 的完整 localStorage，原生 document-start 恢复，兼容旧 Cookie 快照。
+- 创建会话支持 `private_mode` 和 `resource_cache`，默认缓存 JS/CSS，可配置后缀、保留时间与容量。
+- 可选 `cache` 依赖提供跨进程 HTTP/HTTPS 磁盘缓存，支持既有代理，临时 CA 仅在当前窗口受信任。
+- 新增存储/缓存单元测试及真实 WebView 冒烟测试；缓存需要 Python 3.12+。
+
+
 ## [0.1.4] - 2026-10-30
 
 ### Security

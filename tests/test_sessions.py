@@ -203,3 +203,25 @@ def test_session_credentials_only_reach_private_worker_config(tmp_path, monkeypa
             assert stat.S_IMODE(session.config_file.stat().st_mode) == 0o600
     finally:
         manager.close()
+
+
+def test_snapshot_storage_and_cache_are_passed_to_worker(tmp_path, monkeypatch):
+    manager = _manager(tmp_path)
+    process = FakeProcess()
+    monkeypatch.setattr("agent_webview.sessions.subprocess.Popen", lambda *_, **__: process)
+    monkeypatch.setattr(manager, "_wait_ready", lambda *_: {"pid": process.pid, "port": 54321})
+    monkeypatch.setattr(manager, "request", lambda *_, **__: (_ for _ in ()).throw(httpx.ConnectError("不可用")))
+    snapshot = manager.snapshot_store.save(session_id="old", url="https://example.test/", cookies=[], name=None,
+                                           local_storage={"https://example.test": {"token": "value"}})
+    try:
+        created = manager.create(SessionCreateRequest(snapshot_id=snapshot["snapshot_id"], private_mode=False,
+                                                      resource_cache={"enabled": True, "extensions": ["js", "css", "svg"]}))
+        session = manager.get(created["session_id"])
+        config = json.loads(session.config_file.read_text())
+        assert config["local_storage"] == snapshot["local_storage"]
+        assert config["private_mode"] is False
+        assert config["resource_cache"]["extensions"] == [".js", ".css", ".svg"]
+        assert Path(config["cache_directory"]) == tmp_path / "resource-cache"
+        assert Path(config["storage_path"]).is_relative_to(session.config_file.parent)
+    finally:
+        manager.close()

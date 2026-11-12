@@ -309,12 +309,13 @@ def create_controller_app(manager: SessionManager, token: str) -> FastAPI:
         session_id: str,
         request: CookieSnapshotCreateRequest,
     ) -> dict[str, Any]:
-        result = call(session_id, "GET", "/v1/cookies")
+        result = call(session_id, "GET", "/v1/storage-state")
         return manager.snapshot_store.save(
             session_id=session_id,
             url=result.get("url"),
             cookies=result.get("cookies", []),
             name=request.name,
+            local_storage=result["local_storage"],
         )
 
     @router.get("/cookie-snapshots", response_model=CookieSnapshotListResponse)

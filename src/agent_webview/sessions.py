@@ -20,7 +20,11 @@ import structlog
 
 from agent_webview.cookies import SnapshotStore
 from agent_webview.files import ensure_private_directory, write_private_json
-from agent_webview.models import CookieRecord, SessionCreateRequest
+from agent_webview.models import (
+    CookieRecord,
+    SessionCreateRequest,
+    StorageStateResponse,
+)
 from agent_webview.proxy import ProxyConfigurationError, normalize_proxy_url
 
 log = structlog.get_logger(__name__)
@@ -89,6 +93,11 @@ class SessionManager:
             **request.model_dump(exclude={"snapshot_id", "cookies", "proxy", "proxy_username", "proxy_password"}),
             "url": url,
             "cookies": cookies,
+            "local_storage": StorageStateResponse(
+                url=url, cookies=[], local_storage=(snapshot or {}).get("local_storage", {}),
+            ).local_storage,
+            "cache_directory": str(self.snapshot_store.directory.parent / "resource-cache"),
+            "storage_path": str(session_dir / "browser-profile"),
             "proxy": (
                 {"url": effective_proxy, "scope": proxy_scope}
                 if effective_proxy

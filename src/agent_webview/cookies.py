@@ -78,6 +78,7 @@ class SnapshotStore:
         url: str | None,
         cookies: list[dict[str, Any]],
         name: str | None,
+        local_storage: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         snapshot_id = uuid4().hex
         document = {
@@ -87,9 +88,12 @@ class SnapshotStore:
             "url": url,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "cookies": cookies,
+            "schema_version": 2,
+            "local_storage": local_storage or {},
             "limitations": [
                 "通过 document.cookie 恢复，无法恢复 HttpOnly Cookie。",
                 "浏览器策略可能拒绝部分 Cookie 属性。",
+                "localStorage 保存当前主文档 origin；不包含其他 origin、sessionStorage 或 IndexedDB。",
             ],
         }
         target = self.directory / f"{snapshot_id}.json"

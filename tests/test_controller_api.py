@@ -89,10 +89,11 @@ class FakeManager:
         path: str,
         **__,
     ) -> dict[str, Any]:
-        if method == "GET" and path == "/v1/cookies":
+        if method == "GET" and path in {"/v1/cookies", "/v1/storage-state"}:
             return {
                 "url": "https://example.com/",
                 "cookies": [{"name": "session", "value": "测试值"}],
+                "local_storage": {"https://example.com": {"token": "测试值"}},
             }
         if method == "GET" and path == "/v1/proxy":
             return _window()["proxy"]

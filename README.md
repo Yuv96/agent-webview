@@ -29,7 +29,8 @@
 | 页面操作 | 支持导航、DOM 查询、输入、点击和 JavaScript 执行 |
 | 可观测性 | 支持 DOM 事件、DOM 变更和页面网络活动的长轮询采集 |
 | 代理调试 | 支持全局或单窗口 HTTP/HTTPS 代理，并异步查询出口 IP 与归属地 |
-| Cookie 快照 | 可保存 Cookie，并在新会话中尽力恢复 |
+| 登录快照 | 保存 Cookie 和当前 origin 的 localStorage，并在新会话恢复 |
+| 资源缓存 | 可选跨进程本地缓存，默认仅 JS/CSS，支持后缀白名单 |
 | 跨平台 | 支持 Windows、macOS 和带 GTK/Qt 后端的 Linux |
 
 ## 🧱 工作方式
@@ -295,20 +296,77 @@ if proxy["state"] == "active":
 或所有响应体。需要协议级调试时，可以在创建会话时设置
 `remote_debugging_port`，并使用后端支持的 DevTools 协议。
 
-## 🍪 Cookie 快照
+## 🍪 登录快照（Cookie + localStorage）
 
 Cookie 快照默认保存在当前用户数据目录，也可以通过 `--data-dir` 指定位置。创建
 新会话时传入 `snapshot_id` 即可尝试恢复；请求中显式提供的 `cookies` 会覆盖快照
-内同名、同域、同路径的 Cookie。
+内同名、同域、同路径的 Cookie。原 `/cookie-snapshots` 路径保持兼容。
+
+新快照增加 `schema_version: 2` 和 `local_storage: {"https://example.com": {"key": "value"}}`。
+保存当前主文档 origin（协议、主机、端口）的全部 localStorage 字符串键值，包含空值、
+Unicode、特殊键名和超过 500 个键的存储。恢复时先清空对应 origin，再写入快照内容；
+通过原生 document-start 脚本，在网站首段 JavaScript 运行前执行。只在该会话首次访问
+匹配 origin 时恢复，后续刷新或导航不覆盖网站新写入的数据，也不向其他 origin 注入凭证。
+旧的仅 Cookie 快照仍可加载。localStorage 恢复支持 macOS WKWebView、Windows WebView2。
 
 恢复存在浏览器后端限制：
 
 - pywebview 可以读取包含 HttpOnly 在内的 Cookie。
 - 通用跨后端恢复依赖 `document.cookie`，因此无法恢复 HttpOnly Cookie。
 - Domain、SameSite、Secure、过期时间和浏览器策略可能拒绝部分 Cookie。
-- 快照不包含 IndexedDB、Local Storage、Service Worker 或缓存。
+- localStorage 仅包含保存时的当前主文档 origin，不包含其他 origin、跨域 iframe、sessionStorage、IndexedDB 或 Service Worker。
+- 资源缓存独立保存在数据目录中，不打包进登录快照。
 
 Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到版本控制系统。
+
+## 📦 启动资源缓存
+
+使用 Python 3.12+ 安装可选依赖（基础功能仍支持 Python 3.10+）：
+
+```bash
+pip install 'agent-webview[cache]'
+# 源码开发环境
+uv sync --extra dev --extra cache
+```
+
+创建会话时指定：
+
+```json
+{
+  "url": "https://example.com/",
+  "private_mode": true,
+  "resource_cache": {
+    "enabled": true,
+    "extensions": [".js", ".css"],
+    "max_age_seconds": 604800,
+    "max_resource_bytes": 20971520,
+    "max_total_bytes": 536870912
+  }
+}
+```
+
+`private_mode` 默认 `true`，可设为 `false`；两种模式均可启用资源缓存。API 会话仍采用独立进程；共享资源保存在 `<data-dir>/resource-cache/resources.sqlite3`，
+worker 或控制器重启后仍可复用。缓存默认关闭，关闭时既不读取也不写入共享缓存。
+
+命中有效缓存直接返回本地资源；未命中则联网并保存成功响应。完整 URL（含查询参数）、
+协议、端口及响应 Vary 指定的请求头参与匹配；Cookie、Authorization、Origin 和压缩协商
+始终隔离，不同凭证不会互用响应。未被 Vary 指定的 Referer 等请求头变化不影响命中。
+各资源按自己的域名区分，CDN 资源也可缓存。默认仅 URL 路径后缀 `.js`、`.css`；
+图片、HTML、无后缀 URL 默认不缓存，可显式加入 `.svg`、`.png`、`.html`、`.mjs` 等后缀。
+列表为完整白名单，`[".svg"]` 表示仅缓存 SVG；大小写会归一化，查询参数不参与后缀判断。
+
+缓存采用显式 cache-first 策略：在 `max_age_seconds` 内复用，不按服务器的 max-age
+重新验证。因此内容有变化应更换资源 URL/版本参数，缩短保存时间，或停止会话后删除缓存数据库。
+仅保存 GET 的完整 200 响应；跳过 Range、升级请求、`no-store`、`private`、`Vary: *`、
+带 `Set-Cookie` 的响应以及超大资源。默认单项上限 20 MiB、实体总量 512 MiB，超限淘汰最早条目。
+页面或 Service Worker 自行截获的请求不经过此缓存。
+
+HTTP/HTTPS 缓存由 worker 内的本地代理完成，兼容既有全局/单窗口代理；HTTPS 上游仍进行
+证书校验，临时 CA 只由当前窗口信任，不写入系统钥匙串。支持 macOS 14+ WKWebView 和
+Windows WebView2；其他后端启用时明确报错。浏览器对 localhost/回环地址可能绕过代理，
+本地站点不保证进入共享缓存。此模式使用代理网络栈，依赖 TLS 指纹或客户端证书的网站可能不兼容。
+
+验证命令：`uv run --extra cache python scripts/smoke_storage_cache.py`。
 
 ## ⚙️ 常用配置
 
@@ -342,7 +400,7 @@ Cookie 快照和运行信息文件都应按敏感数据处理，不应提交到�
 
 ## 📐 设计边界
 
-- 无痕隔离依靠“一会话一进程”和 `private_mode=True`。
+- 默认无痕隔离依靠“一会话一进程”和 `private_mode=True`；可在创建请求中关闭无痕。
 - 所有 worker 接口只监听随机本机端口，并使用独立内部令牌。
 - 控制器重启不会恢复仍在运行的 worker 会话。
 - DOM `click()` 不等同于操作系统级鼠标事件。

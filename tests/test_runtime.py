@@ -347,3 +347,22 @@ def test_proxy_switch_rejects_unconfigured_or_global_sessions(scope):
     runtime._on_closed()
     with pytest.raises(BrowserNotReadyError, match="关闭"):
         runtime.update_proxy(ProxyUpdateRequest(proxy="http://127.0.0.1:7002"))
+
+
+def test_storage_capture_is_lossless_and_rejects_navigation_races():
+    import json
+
+    bridge = FakeBridge()
+    runtime = BrowserRuntime(session_id="s", window_id="w", bridge=bridge, events=EventBuffer())
+    window = FakeWindow()
+    runtime.attach_window(window, visible=False)
+    runtime.operational_ready.set()
+    entries = {str(i): "value" for i in range(600)}
+    entries["__proto__"] = "中文\n😀"
+    bridge.result = json.dumps({"url": window.url, "local_storage": {"https://example.com": entries}})
+    state = runtime.get_storage_state()
+    assert state["local_storage"]["https://example.com"] == entries
+    assert state["cookies"][0]["name"] == "session"
+    window.url = "https://other.example/"
+    with pytest.raises(BrowserNotReadyError, match="导航"):
+        runtime.get_storage_state()
