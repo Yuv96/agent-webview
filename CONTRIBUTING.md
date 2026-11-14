@@ -10,6 +10,7 @@ uv run --extra dev --extra cache mypy
 uv run --extra dev --extra cache pytest
 uv run python scripts/smoke_service.py
 uv run --extra cache python scripts/smoke_proxy_switch.py
+uv run --extra cache python scripts/smoke_proxy_switch.py --cache
 uv run --extra cache python scripts/smoke_storage_cache.py
 ```
 

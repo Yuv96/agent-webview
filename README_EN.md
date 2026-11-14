@@ -395,6 +395,8 @@ WebView2. Other backends fail explicitly. Browsers may bypass proxies for loopba
 addresses, so localhost caching is not guaranteed. Sites depending on TLS fingerprints
 or client certificates may be incompatible with this proxy mode.
 
+macOS proxy windows use a dedicated WKWebView data store, including HTTPS resource caching on macOS 14. Cookie access and private-mode cleanup use the same store as the window. System proxy settings and the keychain remain unchanged. Unsupported native proxy configuration fails explicitly without a direct fallback. Run `uv run --extra cache python scripts/smoke_proxy_switch.py --cache` to verify authenticated proxy switching with caching enabled.
+
 Run `uv run --extra cache python scripts/smoke_storage_cache.py` for native smoke checks.
 
 ## ⚙️ Configuration

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
@@ -76,6 +77,9 @@ def test_proxy(label: str):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="验证原生窗口代理切换")
+    parser.add_argument("--cache", action="store_true", help="同时启用资源缓存")
+    args = parser.parse_args()
     with (
         tempfile.TemporaryDirectory(prefix="webview-proxy-smoke-") as name,
         test_proxy("first") as (first, first_requests),
@@ -120,6 +124,7 @@ def main():
                     json={
                         "url": "http://proxy-switch.invalid/",
                         "visible": False,
+                        "resource_cache": {"enabled": args.cache},
                         "proxy": first,
                         "proxy_username": "test",
                         "proxy_password": "first",  # pragma: allowlist secret

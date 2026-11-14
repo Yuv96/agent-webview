@@ -119,7 +119,6 @@ def format_proxy_title(
 def configure_browser_proxy(proxy_url: str) -> None:
     """在 pywebview 选择并初始化浏览器内核前应用代理。"""
     normalized = normalize_proxy_url(proxy_url)
-    parsed = urlsplit(normalized)
     system = platform.system()
 
     _set_process_proxy_environment(normalized)
@@ -132,11 +131,7 @@ def configure_browser_proxy(proxy_url: str) -> None:
         _append_environment_flag("QTWEBENGINE_CHROMIUM_FLAGS", flag)
 
     if system == "Darwin":
-        _configure_macos_proxy(
-            hostname=parsed.hostname or "",
-            port=parsed.port or (443 if parsed.scheme == "https" else 80),
-            tls=parsed.scheme == "https",
-        )
+        _validate_macos_proxy_support()
     elif system not in {"Windows", "Linux", "OpenBSD"}:
         raise ProxyConfigurationError(f"当前平台不支持浏览器代理：{system}")
 
@@ -160,10 +155,7 @@ def _append_environment_flag(name: str, flag: str) -> None:
     os.environ[name] = f"{current} {flag}".strip()
 
 
-_MACOS_PROXY_REFERENCES: list[Any] = []
-
-
-def _configure_macos_proxy(*, hostname: str, port: int, tls: bool) -> None:
+def _validate_macos_proxy_support() -> None:
     version = platform.mac_ver()[0]
     try:
         major = int(version.split(".", 1)[0])
@@ -171,27 +163,4 @@ def _configure_macos_proxy(*, hostname: str, port: int, tls: bool) -> None:
         major = 0
     if major < 14:
         raise ProxyConfigurationError("WKWebView 代理需要 macOS 14 或更高版本")
-
-    try:
-        import Network
-        import WebKit
-    except ImportError as error:
-        raise ProxyConfigurationError("macOS 代理组件未安装") from error
-
-    try:
-        endpoint = Network.nw_endpoint_create_host(
-            hostname.encode("idna"),
-            str(port).encode("ascii"),
-        )
-        tls_options = Network.nw_tls_create_options() if tls else None
-        proxy = Network.nw_proxy_config_create_http_connect(endpoint, tls_options)
-        Network.nw_proxy_config_set_failover_allowed(proxy, False)
-        data_store = WebKit.WKWebsiteDataStore.defaultDataStore()
-        data_store.setProxyConfigurations_([proxy])
-    except Exception as error:
-        raise ProxyConfigurationError("无法配置 WKWebView 代理") from error
-
-    # Network.framework 对象由 Objective-C 管理；保留 Python 引用直至 worker 退出。
-    _MACOS_PROXY_REFERENCES.extend(
-        item for item in (endpoint, tls_options, proxy, data_store) if item is not None
-    )
+    # 原生 initialized 回调中配置独立数据存储；此处不提前创建默认存储。

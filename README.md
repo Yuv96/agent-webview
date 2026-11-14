@@ -366,7 +366,9 @@ HTTP/HTTPS 缓存由 worker 内的本地代理完成，兼容既有全局/单窗
 Windows WebView2；其他后端启用时明确报错。浏览器对 localhost/回环地址可能绕过代理，
 本地站点不保证进入共享缓存。此模式使用代理网络栈，依赖 TLS 指纹或客户端证书的网站可能不兼容。
 
-验证命令：`uv run --extra cache python scripts/smoke_storage_cache.py`。
+macOS 窗口通过独立 WKWebView 数据存储配置代理，兼容 macOS 14 的 HTTPS 缓存证书验证。Cookie 读取和无痕清理使用该窗口的同一存储；系统代理和钥匙串不变。原生配置接口不可用时会明确报错，不退回直连。
+
+验证命令：`uv run --extra cache python scripts/smoke_storage_cache.py`；缓存与代理切换组合验证：`uv run --extra cache python scripts/smoke_proxy_switch.py --cache`。
 
 ## ⚙️ 常用配置
 

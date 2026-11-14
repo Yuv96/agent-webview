@@ -73,6 +73,8 @@ def _run_browser(config: dict[str, Any], relay: ProxyRelay | None, cache_proxy: 
     proxy_config = config.get("proxy") or {}
     proxy_url = proxy_config.get("url")
     browser_proxy = cache_proxy.url if cache_proxy else (relay.url if relay else proxy_url)
+    # macOS 的 Network.framework CONNECT 通道无法采用缓存窗口的临时 CA；
+    # 原生初始化阶段改用独立数据存储的 HTTP/HTTPS 代理，保留正常证书校验。
     if browser_proxy:
         try:
             configure_browser_proxy(browser_proxy)
@@ -153,7 +155,11 @@ def _run_browser(config: dict[str, Any], relay: ProxyRelay | None, cache_proxy: 
     def initialize(renderer: str) -> bool:
         nonlocal initialization_error
         try:
-            configure_native(renderer, config.get("local_storage", {}), cache_proxy.ca_file if cache_proxy else None)
+            configure_native(
+                renderer, config.get("local_storage", {}), cache_proxy.ca_file if cache_proxy else None,
+                browser_proxy=browser_proxy,
+                private_mode=config.get("private_mode", True),
+            )
         except Exception as error:
             initialization_error = True
             message = str(error) if isinstance(error, ProxyConfigurationError) else "原生存储或缓存初始化失败"

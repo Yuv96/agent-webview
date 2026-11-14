@@ -107,8 +107,14 @@ def main() -> None:
                 assert counts["/"] >= 3, counts
                 assert counts["/image.svg"] >= 3, counts
                 plain = create()
+                evaluate(plain, 'document.cookie="isolated=1; path=/", localStorage.setItem("private", "value"), true')
                 api("DELETE", f"/sessions/{plain}")
                 assert counts["/app.js?v=1"] == 2, counts
+                isolated = create(resource_cache=cache)
+                assert evaluate(isolated, "document.cookie") == ""
+                assert evaluate(isolated, 'localStorage.getItem("private")') is None
+                assert counts["/app.js?v=1"] == 2, counts
+                api("DELETE", f"/sessions/{isolated}")
                 # HTTPS 代理证书仅在当前原生窗口受信任。
                 secure = create(url="https://example.com/", proxy=None, resource_cache=cache)
                 assert evaluate(secure, "document.title") == "Example Domain"

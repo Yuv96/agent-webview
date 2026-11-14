@@ -7,25 +7,76 @@ from agent_webview.proxy import ProxyConfigurationError
 from agent_webview.storage import storage_restore_script
 
 
-def configure_native(renderer: str, storage: dict[str, dict[str, str]], ca_file: Path | None) -> None:
-    if not storage and ca_file is None:
+def configure_native(
+    renderer: str, storage: dict[str, dict[str, str]], ca_file: Path | None,
+    *, browser_proxy: str | None = None, private_mode: bool = True,
+) -> None:
+    if not storage and ca_file is None and (not browser_proxy or renderer not in {"cocoa", "wkwebview"}):
         return
     script = storage_restore_script(storage) if storage else None
     if renderer == "cocoa":
         renderer = "wkwebview"
     if renderer == "wkwebview":
-        _configure_cocoa(script, ca_file)
+        _configure_cocoa(script, ca_file, browser_proxy=browser_proxy, private_mode=private_mode)
     elif renderer == "edgechromium":
         _configure_edge(script, ca_file)
     else:
         raise ProxyConfigurationError("localStorage 快照恢复和资源缓存目前支持 WKWebView / WebView2")
 
 
-def _configure_cocoa(script: str | None, ca_file: Path | None) -> None:
+def _configure_cocoa_proxy(proxy_url: str, private_mode: bool) -> None:
+    """代理使用独立的 CFNetwork 数据存储，支持窗口级证书校验。"""
+    from urllib.parse import urlsplit
+
+    import Foundation
+    import objc
+    import WebKit
+    from objc import super as objc_super
+    from webview.platforms.cocoa import BrowserView
+
+    try:
+        configuration_type = objc.lookUpClass("_WKWebsiteDataStoreConfiguration")
+        configuration = configuration_type.alloc()
+        configuration = configuration.initNonPersistentConfiguration() if private_mode else configuration.init()
+        endpoint = Foundation.NSURL.URLWithString_(proxy_url)
+        configuration.setHTTPProxy_(endpoint)
+        configuration.setHTTPSProxy_(endpoint)
+        # 缓存/可变代理入口为本地 HTTP；全局 HTTPS 代理保留到代理本身的 TLS。
+        configuration.setRequiresSecureHTTPSProxyConnection_(urlsplit(proxy_url).scheme == "https")
+        store = WebKit.WKWebsiteDataStore.alloc()._initWithConfiguration_(configuration)
+        if store is None:
+            raise RuntimeError("无法创建数据存储")
+
+        class ProxyWebViewConfiguration(WebKit.WKWebViewConfiguration):
+            def init(self):
+                instance = objc_super(ProxyWebViewConfiguration, self).init()
+                instance.setWebsiteDataStore_(store)
+                return instance
+
+        WebKit.WKWebViewConfiguration = ProxyWebViewConfiguration
+        # pywebview 在创建 WKWebView 后才设置数据存储，已经晚于配置复制。
+        # 让其 Cookie 读取与无痕清理也指向窗口真实使用的存储，避免触及默认存储。
+        BrowserView.datastore = property(
+            lambda self: self.webview.configuration().websiteDataStore(),
+            lambda self, value: None,
+        )
+    except Exception as error:
+        raise ProxyConfigurationError("当前 WKWebView 无法配置独立代理") from error
+
+
+def _configure_cocoa(
+    script: str | None, ca_file: Path | None,
+    *, browser_proxy: str | None = None, private_mode: bool = True,
+) -> None:
     import AppKit
     import Security
     import WebKit
     from webview.platforms.cocoa import BrowserView
+
+    if ca_file and not browser_proxy:
+        raise ProxyConfigurationError("WKWebView 缓存缺少本地代理入口")
+    if browser_proxy:
+        _configure_cocoa_proxy(browser_proxy, private_mode)
 
     if script:
         original_load = BrowserView.load_url
