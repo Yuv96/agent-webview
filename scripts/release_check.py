@@ -119,6 +119,7 @@ def audit_requirements(requirements: Path) -> None:
         ("tornado", "6.5.10", "CVE-2026-116577"),
         ("tornado", "6.5.10", "CVE-2026-115927"),
         ("tornado", "6.5.10", "CVE-2026-116578"),
+        ("tornado", "6.5.10", "CVE-2026-126347"),
     }
     command = ["uv", "run", "--extra", "dev", "--extra", "cache", "pip-audit",
                "--requirement", str(requirements), "--format", "json"]

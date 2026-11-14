@@ -27,7 +27,7 @@
 
 ## 可选缓存依赖的已核查告警
 
-核查日期：2026-11-12。`cache` extra 的 mitmproxy 12.3.1 将 Tornado 限定为
+核查日期：2026-11-14。`cache` extra 的 mitmproxy 12.3.1 将 Tornado 限定为
 `>=6.5.0,<=6.5.10`，目前不能直接安装已经修复的 Tornado 6.6+。
 基础安装 `pip install agent-webview` 不引入该依赖。
 
@@ -36,6 +36,7 @@
 - [CVE-2026-116577](https://github.com/tornadoweb/tornado/security/advisories/GHSA-pcg2-g6cj-q92c)：Tornado HTTP 头解析的 CPU 消耗。
 - [CVE-2026-115927](https://github.com/tornadoweb/tornado/security/advisories/GHSA-r4j5-9xpp-3985)：Tornado 分块请求体解析的 CPU/内存消耗。
 - [CVE-2026-116578](https://github.com/tornadoweb/tornado/security/advisories/GHSA-pw9p-v7r6-gx4p)：Tornado RedirectHandler 的开放重定向。
+- [CVE-2026-126347](https://github.com/advisories/GHSA-5cjw-f85j-cv6r)：RedirectHandler 对三个及以上斜线开头路径的开放重定向，是上述修复的遗漏分支；修复版本为 6.6.1。本组件不加载该处理器，沿用下述隔离验证。
 
 本组件使用 `mitmproxy.tools.dump.DumpMaster`，通过 mitmproxy 自身的代理协议栈处理
 HTTP/HTTPS，不加载 Tornado，也不启动 mitmweb 或 Tornado HTTP 服务；内置 onboarding

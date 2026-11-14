@@ -17,6 +17,10 @@
 - 增加原生代理配置时序、Cookie 存储绑定和配置失败测试。
 - 扩展真实窗口冒烟测试，覆盖无痕 Cookie/localStorage 隔离及开启缓存时的账密代理切换。
 
+### Security
+
+- 核查新增 Tornado RedirectHandler 告警 CVE-2026-126347：缓存进程不加载 Tornado，隔离测试继续通过；记录精确版本例外，详见 SECURITY.md。
+
 ## [0.1.5] - 2026-11-12
 
 ### Added
