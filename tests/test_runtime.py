@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.cookies import SimpleCookie
 from threading import Event
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -96,6 +97,19 @@ class FakeBridge:
     def execute(self, code: str, *, expression: bool, timeout: float):
         self.calls.append((code, expression, timeout))
         return self.result
+
+
+def test_status_does_not_wait_for_url_while_page_is_loading() -> None:
+    bridge = FakeBridge()
+    bridge.ready.clear()
+    runtime = BrowserRuntime(session_id="pending", window_id="window", bridge=bridge, events=EventBuffer())
+    window = FakeWindow()
+    window.get_current_url = Mock(return_value="https://example.test/")
+    runtime.attach_window(window, visible=False)
+    assert runtime.status()["url"] is None
+    window.get_current_url.assert_not_called()
+    bridge.ready.set()
+    assert runtime.status()["url"] == "https://example.test/"
 
 
 def test_runtime_window_and_dom_lifecycle() -> None:

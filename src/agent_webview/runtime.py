@@ -428,7 +428,9 @@ class BrowserRuntime:
         self.window.run_js(instrumentation_script(self.instrumentation.model_dump()))
 
     def _safe_current_url(self) -> str | None:
-        if not self.window:
+        # pywebview 的 get_current_url 会等待 loaded 最多 20 秒。
+        # 状态轮询必须在页面尚未就绪时立即返回，不能把加载等待变成 HTTP 超时。
+        if not self.window or not self.bridge.ready.is_set():
             return None
         try:
             return self.window.get_current_url()

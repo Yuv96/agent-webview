@@ -110,7 +110,12 @@ class CacheAddon:
             cached = None
         if cached is not None:
             headers, body = cached
-            flow.response = http.Response.make(200, body, headers)
+            # 缓存保存的是编码后的原始实体。Response.make(content=...) 会按
+            # Content-Encoding 再次压缩，导致 gzip/br 缓存命中后脚本损坏。
+            flow.response = http.Response.make(200)
+            flow.response.headers = http.Headers(headers)
+            flow.response.raw_content = body
+            flow.response.headers["content-length"] = str(len(body))
             flow.metadata["agent_cache_hit"] = True
 
     def responseheaders(self, flow: Any) -> None:

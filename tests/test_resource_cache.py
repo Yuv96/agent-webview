@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_webview.models import ResourceCacheOptions
-from agent_webview.resource_cache import ResourceCache
+from agent_webview.resource_cache import CacheAddon, ResourceCache
 
 
 class Headers(dict):
@@ -107,3 +107,27 @@ def test_vary_and_cross_page_resource_reuse(tmp_path):
     cache.put(english, response(b"en", vary="Accept-Language"))
     assert cache.get(english)[1] == b"en"
     assert cache.get(first)[1] == b"zh"
+
+
+@pytest.mark.parametrize("encoding", ["gzip", "br", "deflate", "identity"])
+@pytest.mark.parametrize("content_length", [True, False])
+def test_cache_hit_replays_encoded_entity_without_recompressing(tmp_path, encoding, content_length):
+    http = pytest.importorskip("mitmproxy.http", reason="需要 cache extra 验证真实响应编码")
+    script = b"window.resourceLoaded = true;" * 50
+    req = http.Request.make("GET", "https://example.test/app.js", headers={"accept-encoding": encoding})
+    original = http.Response.make(200, script, {"content-encoding": encoding, "content-type": "application/javascript"})
+    if not content_length:
+        del original.headers["content-length"]
+        original.headers["transfer-encoding"] = "chunked"
+    cache = ResourceCache(tmp_path, ResourceCacheOptions(enabled=True))
+    cache.put(req, original)
+    # 使用重开的缓存，涵盖旧版本已经写入的压缩实体。
+    addon = CacheAddon(ResourceCache(tmp_path, ResourceCacheOptions(enabled=True)))
+    flow = SimpleNamespace(request=req, response=None, metadata={})
+    addon.request(flow)
+    assert flow.metadata["agent_cache_hit"] is True
+    assert flow.response.raw_content == original.raw_content
+    assert flow.response.content == script
+    assert flow.response.headers["content-encoding"] == encoding
+    assert int(flow.response.headers["content-length"]) == len(original.raw_content)
+    assert "transfer-encoding" not in flow.response.headers

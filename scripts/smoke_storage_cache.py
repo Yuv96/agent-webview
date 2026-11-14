@@ -2,6 +2,7 @@
 """用本机 HTTP 页面验证快照恢复时序和跨 worker 资源缓存。"""
 from __future__ import annotations
 
+import gzip
 import json
 import subprocess
 import sys
@@ -45,6 +46,9 @@ def main() -> None:
                                  b'</head><body><img src="/image.svg"></body></html>'), "text/html"
             self.send_response(200)
             self.send_header("Content-Type", kind)
+            if kind in {"application/javascript", "text/css"}:
+                content = gzip.compress(content)
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
