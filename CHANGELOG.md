@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-11-14
+
+### Fixed
+
+- 修复压缩 JS/CSS 缓存命中时被二次编码的问题：按原始字节回放 gzip、Brotli、deflate 响应，并重新计算 Content-Length，保留原有 Content-Encoding。已有磁盘缓存无需清空。
+- 页面尚未 loaded 时，状态接口立即返回 url=null，不再调用会阻塞 20 秒的 pywebview URL 查询，避免调用方先遇到 HTTP timeout。
+
+### Tests
+
+- 增加真实 mitmproxy 响应回放测试，覆盖多种压缩编码、带/不带 Content-Length 和重开旧缓存。
+- 原生缓存冒烟页面使用 gzip 压缩 JS/CSS，验证跨 worker 的缓存命中后仍能执行脚本并正确渲染。
+
 ## [0.1.6] - 2026-11-14
 
 ### Fixed
